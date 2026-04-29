@@ -29,6 +29,7 @@ func errJSON(msg string) map[string]string { return map[string]string{"error": m
 
 // ── GET /api/status ───────────────────────────────────────────────────────────
 func hStatus(w http.ResponseWriter, r *http.Request) {
+	RegisterHeartbeat()
 	embedOK := clipReady // prefer local CLIP
 	if !embedOK {
 		if resp, err := httpClient.Get(Config.EmbedderURL() + "/health"); err == nil {
@@ -54,7 +55,10 @@ func hStatus(w http.ResponseWriter, r *http.Request) {
 
 // ── GET /api/index/state ──────────────────────────────────────────────────────
 func hIndexState(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, idxState.snap())
+	RegisterHeartbeat()
+	snap := idxState.snap()
+	snap["total_indexed"] = globalIndex.Count()
+	writeJSON(w, snap)
 }
 
 // ── DELETE /api/index ─────────────────────────────────────────────────────────
@@ -63,9 +67,21 @@ func hClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot clear while indexing", 409)
 		return
 	}
-	n := dbClear()
+	dbClearAll()
 	globalIndex.Clear()
-	writeJSON(w, map[string]interface{}{"cleared": n})
+	idxState.mu.Lock()
+	idxState.UserPaused = true
+	idxState.mu.Unlock()
+	RefreshIdxStateCounts()
+	writeJSON(w, map[string]interface{}{"status": "cleared"})
+}
+
+func hToggleSync(w http.ResponseWriter, r *http.Request) {
+	idxState.mu.Lock()
+	idxState.UserPaused = !idxState.UserPaused
+	paused := idxState.UserPaused
+	idxState.mu.Unlock()
+	writeJSON(w, map[string]interface{}{"user_paused": paused})
 }
 
 // ── POST /api/search ──────────────────────────────────────────────────────────

@@ -73,13 +73,27 @@ func embEngineSvcURL() string {
 type IndexState struct {
 	mu          sync.RWMutex
 	Running     bool           `json:"running"`
-	Progress    int32          `json:"-"`
+	Progress    int32          `json:"processed"`
 	Total       int            `json:"total"`
 	CurrentFile string         `json:"current_file"`
 	Status      string         `json:"status"`
 	Log         []string       `json:"log"`
 	ErrMsg      string         `json:"error,omitempty"`
 	Counts      map[string]int `json:"counts"`
+	UserPaused  bool           `json:"user_paused"`
+	LastHeart   time.Time      `json:"-"`
+}
+
+func RegisterHeartbeat() {
+	idxState.mu.Lock()
+	idxState.LastHeart = time.Now()
+	idxState.mu.Unlock()
+}
+
+func isAppOpen() bool {
+	idxState.mu.RLock()
+	defer idxState.mu.RUnlock()
+	return time.Since(idxState.LastHeart) < 15*time.Second
 }
 
 func (s *IndexState) snap() map[string]interface{} {
@@ -89,7 +103,7 @@ func (s *IndexState) snap() map[string]interface{} {
 	copy(logCopy, s.Log)
 	return map[string]interface{}{
 		"running":      s.Running,
-		"progress":     atomic.LoadInt32(&s.Progress),
+		"processed":    atomic.LoadInt32(&s.Progress),
 		"total":        s.Total,
 		"current_file": s.CurrentFile,
 		"status":       s.Status,
@@ -108,25 +122,68 @@ func (s *IndexState) addLog(line string) {
 	s.mu.Unlock()
 }
 
-var idxState = &IndexState{Status: "idle"}
+var idxState = &IndexState{
+	Status: "idle",
+	Counts: make(map[string]int),
+}
+
+func RefreshIdxStateCounts() {
+	idxState.mu.Lock()
+	idxState.Counts = dbGetFormatCounts()
+	idxState.mu.Unlock()
+}
 
 // ── File scan ─────────────────────────────────────────────────────────────────
 
 func findFiles(dir string) []string {
 	var files []string
 	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			// Skip heavy/hidden folders for maximum performance
+			name := d.Name()
+			if name == "node_modules" || name == ".git" || name == ".cache" || strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			// Update status with current folder to show activity
+			idxState.mu.Lock()
+			idxState.Status = "Scanning " + name + "..."
+			idxState.mu.Unlock()
 			return nil
 		}
 		if isSupportedExt(filepath.Ext(p)) {
 			files = append(files, p)
+			// Update total count live so user sees progress
+			idxState.mu.Lock()
+			idxState.Total = len(files)
+			idxState.mu.Unlock()
 		}
 		return nil
 	})
 	return files
 }
 
-func fileID(p string) string { return fmt.Sprintf("%x", md5.Sum([]byte(p))) }
+func fileID(p string) string {
+	f, err := os.Open(p)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	// Deep Logic: Hash the actual content (first 2MB + Size)
+	// This creates a unique 'DNA' for the file even if renamed/moved.
+	h := md5.New()
+	info, _ := f.Stat()
+	if info != nil {
+		fmt.Fprintf(h, "%d", info.Size()) // Include size in DNA
+	}
+	
+	// Fast-hash: Read up to 2MB to keep it lightning fast
+	io.CopyN(h, f, 2*1024*1024)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
 
 // ── Embedder calls ────────────────────────────────────────────────────────────
 
@@ -213,11 +270,20 @@ func callEmbedFile(path string) (*embedResp, error) {
 	return &r, nil
 }
 
+var embMutex sync.Mutex
+
 func callEmbEnginePreview(path string) []byte {
+	embMutex.Lock()
+	defer embMutex.Unlock()
+
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	w.WriteField("file_path", path)
 	w.Close()
+	
+	// Add a tiny 'breath' for the engine
+	time.Sleep(50 * time.Millisecond)
+
 	resp, err := httpClient.Post(embEngineSvcURL()+"/preview", w.FormDataContentType(), &buf)
 	if err != nil {
 		return nil
@@ -249,65 +315,71 @@ func resizeForPreview(b []byte) []byte {
 
 // StartIndexing scans a local folder for supported image and embroidery files,
 // orchestrates AI embedding, and stores the results in the local SQLite database.
-func StartIndexing(folder string, force bool) {
-	files := findFiles(folder)
-	
-	var toIndex []string
-	if force {
-		toIndex = files
-	} else {
-		for _, fp := range files {
-			if !dbIndexed(fileID(fp)) {
-				toIndex = append(toIndex, fp)
-			}
-		}
-	}
-
+func StartIndexing(path string, force bool) {
 	idxState.mu.Lock()
-	idxState.Running = true
-	idxState.Total = len(toIndex)
-	idxState.Status = "Counting formats..."
-	
-	extCounts := make(map[string]int)
-	for _, p := range toIndex {
-		ext := strings.ToLower(filepath.Ext(p))
-		if ext != "" {
-			extCounts[ext[1:]]++
-		}
+	if idxState.Running {
+		idxState.mu.Unlock()
+		return
 	}
-	idxState.Counts = extCounts
-	idxState.Log = nil
-	idxState.ErrMsg = ""
-	idxState.Status = "running"
-	atomic.StoreInt32(&idxState.Progress, 0)
+	idxState.Running = true
+	idxState.Status = "Waiting for AI engine to warm up..."
+	idxState.Progress = 0
+	idxState.Total = 0
 	idxState.mu.Unlock()
 
 	go func() {
 		defer func() {
 			idxState.mu.Lock()
 			idxState.Running = false
-			idxState.Status = "done"
+			idxState.Status = "Idle"
 			idxState.mu.Unlock()
-
-			// Aggressively clean up memory after a big indexing run
+			RefreshIdxStateCounts()
 			MemoryCleanup()
 		}()
 
-		workers := Config.MaxWorkers
-		// Throttle slightly if we are heavily relying on Python and CPU is limited
-		if workers > 4 {
-			workers = 4
+		// Deep Logic: Wait for Python server to be 100% ready before hammering it
+		for i := 0; i < 30; i++ { // Wait up to 60s
+			if embedderAlive() {
+				break
+			}
+			time.Sleep(2 * time.Second)
 		}
+
+		// 1. Live Discovery (findFiles now updates Total live)
+		files := findFiles(path)
+
+		// 2. Indexing
+		idxState.mu.Lock()
+		idxState.Status = "Indexing Designs..."
+		idxState.mu.Unlock()
+
+		workers := 4
 		sem := make(chan struct{}, workers)
 		var wg sync.WaitGroup
 
 		for _, fp := range files {
+			// Deep Logic: Only work if the app is open AND user hasn't paused!
+			for !isAppOpen() || idxState.UserPaused {
+				idxState.mu.Lock()
+				if idxState.UserPaused {
+					idxState.Status = "Sync paused by user"
+				} else {
+					idxState.Status = "Paused — waiting for app window..."
+				}
+				idxState.mu.Unlock()
+				time.Sleep(2 * time.Second)
+			}
+
 			fp := fp
 			id := fileID(fp)
+			if id == "" {
+				continue
+			}
 
 			if !force && dbIndexed(id) {
+				// Deep Logic: Move/Rename detected. Update path without re-indexing.
+				dbUpdatePath(id, fp, filepath.Base(fp))
 				atomic.AddInt32(&idxState.Progress, 1)
-				// Silent skip for maximum performance
 				continue
 			}
 
@@ -320,17 +392,14 @@ func StartIndexing(folder string, force bool) {
 				idxState.CurrentFile = filepath.Base(fp)
 				idxState.mu.Unlock()
 
-				// High-quality EmbEngine preview for .emb files
 				var embEnginePNG []byte
 				if strings.ToLower(filepath.Ext(fp)) == ".emb" {
 					embEnginePNG = callEmbEnginePreview(fp)
 				}
 
 				result, err := callEmbedFile(fp)
-				prog := atomic.AddInt32(&idxState.Progress, 1)
+				atomic.AddInt32(&idxState.Progress, 1)
 				if err != nil {
-					idxState.addLog(fmt.Sprintf("FAIL %s — %v", filepath.Base(fp), err))
-					_ = prog
 					return
 				}
 
@@ -346,43 +415,61 @@ func StartIndexing(folder string, force bool) {
 				}
 
 				e := Entry{
-					ID:         id,
-					FilePath:   fp,
-					FileName:   filepath.Base(fp),
-					Format:     strings.TrimPrefix(strings.ToLower(filepath.Ext(fp)), "."),
-					SizeKB:     sizeKB,
-					HasPreview: png != nil,
+					ID: id, FilePath: fp, FileName: filepath.Base(fp),
+					Format: strings.TrimPrefix(strings.ToLower(filepath.Ext(fp)), "."),
+					SizeKB: sizeKB, HasPreview: png != nil,
 				}
 				if err := dbUpsert(e, png, result.Embedding); err == nil {
 					e.Vector = result.Embedding
 					globalIndex.Add(e)
 				}
-				// Silent success for maximum performance, UI updates via progress bar
 			}()
 		}
 		wg.Wait()
 	}()
 }
+
 // AutoIndexAllDrives scans all auto-detected system drives and indexes them in the background.
 // It processes drives sequentially to avoid system overload.
 func AutoIndexAllDrives() {
-	drives := autoLibPaths()
-	if len(drives) == 0 {
-		return
+	// Let the user know we are ready and waiting
+	idxState.mu.Lock()
+	idxState.Status = "Awaiting app window to begin sync..."
+	idxState.mu.Unlock()
+
+	// Wait for the first app heartbeat before doing anything
+	for !isAppOpen() {
+		time.Sleep(2 * time.Second)
 	}
 
-	go func() {
+	// Perpetual Background Loop: Keeps the library in sync and allows for fresh starts
+	for {
+		// Only work if the user hasn't paused the engine and app is open
+		for !isAppOpen() || idxState.UserPaused {
+			idxState.mu.Lock()
+			if idxState.UserPaused {
+				idxState.Status = "Sync paused by user"
+			} else {
+				idxState.Status = "Awaiting app window..."
+			}
+			idxState.mu.Unlock()
+			time.Sleep(1 * time.Second)
+		}
+
+		drives := autoLibPaths()
+		if len(drives) == 0 {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
 		for _, d := range drives {
-			// Skip root and home to avoid massive slow scans unless specifically requested
-			if d.Path == "/" || strings.HasPrefix(d.Path, "/home") {
+			if d.Path == "/" {
 				continue
 			}
-			
-			// We wait for each drive to finish before starting the next
-			// but we need a way to know when StartIndexing finishes.
-			// For now, we'll just trigger them with a small delay or improve the indexer logic.
-			StartIndexing(d.Path, false) // false = only new files
-			
+
+			// Perform indexing (Content-DNA logic handles the skipping automatically)
+			StartIndexing(d.Path, false)
+
 			// Wait for the indexer to become idle before moving to the next drive
 			for {
 				time.Sleep(5 * time.Second)
@@ -394,5 +481,8 @@ func AutoIndexAllDrives() {
 				}
 			}
 		}
-	}()
+
+		// Full system scan complete. Wait before the next health check scan.
+		time.Sleep(2 * time.Minute)
+	}
 }

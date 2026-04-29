@@ -26,7 +26,7 @@ func initDB(path string) error {
 	db.Exec("PRAGMA mmap_size=268435456")
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS designs (
 		id          TEXT PRIMARY KEY,
-		file_path   TEXT UNIQUE NOT NULL,
+		file_path   TEXT NOT NULL,
 		file_name   TEXT NOT NULL,
 		format      TEXT NOT NULL,
 		size_kb     REAL DEFAULT 0,
@@ -34,6 +34,7 @@ func initDB(path string) error {
 		embedding   BLOB NOT NULL,
 		indexed_at  INTEGER DEFAULT (strftime('%s','now'))
 	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_path ON designs(file_path)")
 	return err
 }
 
@@ -110,4 +111,30 @@ func dbClear() int {
 func dbRemoveByPath(path string) error {
 	_, err := db.Exec("DELETE FROM designs WHERE file_path=?", path)
 	return err
+}
+
+func dbUpdatePath(id string, newPath string, newName string) {
+	db.Exec("UPDATE designs SET file_path=?, file_name=? WHERE id=?", newPath, newName, id)
+}
+
+func dbClearAll() error {
+	_, err := db.Exec("DELETE FROM designs")
+	return err
+}
+
+func dbGetFormatCounts() map[string]int {
+	rows, err := db.Query("SELECT format, COUNT(*) FROM designs GROUP BY format")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	res := make(map[string]int)
+	for rows.Next() {
+		var fmt string
+		var count int
+		if err := rows.Scan(&fmt, &count); err == nil {
+			res[fmt] = count
+		}
+	}
+	return res
 }

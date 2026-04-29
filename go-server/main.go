@@ -30,6 +30,7 @@ func main() {
 		log.Fatalf("DB init: %v", err)
 	}
 	log.Printf("Database: %s", Config.DBPath)
+	RefreshIdxStateCounts()
 
 	// ── Load index from SQLite into memory ────────────────────────────────────
 	entries, _ := dbLoadAll()
@@ -41,13 +42,9 @@ func main() {
 	// ── Drive detection & Auto-Indexing ──────────────────────────────────────
 	log.Printf("Auto-detected drives: %d", len(autoLibPaths()))
 
-	// First-time auto-index: Disabled as per user request for manual control
-	/*
-	if dbCount() == 0 {
-		log.Printf("DATABASE EMPTY: Triggering first-time full system scan...")
-		AutoIndexAllDrives()
-	}
-	*/
+	// Autonomous Sync is now triggered by the UI heartbeat
+	// This ensures we only use system resources when the app is actually open.
+	log.Printf("Autonomous Sync: Ready and waiting for app window...")
 
 	// Start real-time filesystem watcher
 	log.Printf("Starting background filesystem watcher...")
@@ -76,6 +73,8 @@ func main() {
 	mux.HandleFunc("/api/search", hSearch)
 	mux.HandleFunc("/api/preview/", hPreview)
 	mux.HandleFunc("/api/index/state", hIndexState)
+	mux.HandleFunc("/api/index/toggle", hToggleSync)
+	mux.HandleFunc("/api/clear", hClear)
 
 	// Serve embedded UI
 	uiFS, _ := fs.Sub(uiFiles, "ui")
