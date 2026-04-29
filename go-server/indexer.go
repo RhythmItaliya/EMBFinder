@@ -283,7 +283,7 @@ func StartIndexing(folder string, force bool) {
 
 			if !force && dbIndexed(id) {
 				atomic.AddInt32(&idxState.Progress, 1)
-				// Silent skip for maximum performancefor
+				// Silent skip for maximum performance
 				continue
 			}
 

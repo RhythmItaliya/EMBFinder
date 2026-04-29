@@ -7,11 +7,14 @@ ENV/
 
 # Go
 bin/
-go-server/embfind
-go-server/embfind.exe
-go-server/embfind_test
+go-server/embfinder
+go-server/embfinder.exe
+go-server/embfinder_test
 *.test
 *.prof
+
+# Graphify Documentation
+graphify-out/
 
 # Python
 __pycache__/
@@ -60,3 +63,4 @@ release/
 .vscode/
 *.swp
 *.swo
+

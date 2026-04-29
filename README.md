@@ -1,4 +1,4 @@
-# EMBFind — Embroidery Visual Search
+# EMBFind - Embroidery Visual Search
 
 EMBFind is a high-performance, local-first visual search engine for embroidery files and images. It uses a standalone Go server for lightning-fast orchestration and a Python ViT-L-14 AI model for maximum precision vector search.
 
