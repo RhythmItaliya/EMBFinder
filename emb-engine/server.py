@@ -1,9 +1,24 @@
 """
-server.py — EmbEngine ES e4.2 Preview Service
+# ============================================================================
+#  COPYRIGHT & DISCLAIMER
+# ============================================================================
+#  (c) 2026 EMBFinder Contributors. All rights reserved.
+#
+#  DISCLAIMER: This script provides generic automation hooks for third-party
+#  native Windows embroidery engines via Wine/Docker. The authors of this
+#  software do NOT distribute, endorse, or promote the use of any unlicensed,
+#  illegal, or proprietary third-party software.
+#
+#  If you configure this tool to interface with third-party software (e.g.,
+#  Native Embroidery Digitizers), YOU are solely responsible for ensuring that
+#  you hold a valid, legal license for that software. Use at your own risk.
+# ============================================================================
+
+server.py — Generic Automation Engine Preview Service
 Runs inside the Wine/Ubuntu Docker container.
 
 Endpoints:
-  POST /preview   — file_path → high-quality PNG via ES.EXE /ExportBitmap
+  POST /preview   — file_path → high-quality PNG via Engine /ExportBitmap
   POST /convert   — file_path + target_ext → converted file path
   GET  /health    — liveness check
 """
@@ -15,17 +30,18 @@ app = Flask(__name__)
 
 WINE_PREFIX = os.environ.get("WINEPREFIX", "/root/.wine-emb-engine")
 EMB_ENGINE_EXE  = os.environ.get("EMB_ENGINE_EXEC_PATH", "")
+EMB_ENGINE_DIR  = os.environ.get("EMB_ENGINE_DIR", "EmbEngine") # User should set this to their specific vendor folder
 
 def find_es_exe() -> str:
     if EMB_ENGINE_EXE and Path(EMB_ENGINE_EXE).exists():
         return EMB_ENGINE_EXE
     drive_c = Path(WINE_PREFIX) / "drive_c"
+    
+    # Generic searches for automation binaries
     candidates = [
-        drive_c / "Program Files/EmbEngine/EmbroideryStudio_e4.2/BIN/ES.EXE",
-        drive_c / "Program Files/EmbEngine/EmbroideryStudio e4.2/BIN/ES.EXE",
-        drive_c / "Program Files/EmbEngine/EmbroideryStudio_e4_5/BIN/ES.EXE",
-        drive_c / "Program Files/EmbEngine/TrueSizer/TrueSizer.exe",
-        drive_c / "Program Files/EmbEngine/TrueSizer e3.0/TrueSizer.exe",
+        drive_c / f"Program Files/{EMB_ENGINE_DIR}/BIN/ES.EXE",
+        drive_c / f"Program Files (x86)/{EMB_ENGINE_DIR}/BIN/ES.EXE",
+        drive_c / f"Program Files/{EMB_ENGINE_DIR}/TrueSizer.exe",
     ]
     for c in candidates:
         if c.exists():
