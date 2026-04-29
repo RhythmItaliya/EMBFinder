@@ -20,9 +20,10 @@ func main() {
 	initConfig() // Loads all local config + aggressive GC tuning
 
 	fmt.Println(`
-╔══════════════════════════════════════╗
-║  EMBFinder — Embroidery Visual Search  ║
-╚══════════════════════════════════════╝`)
+╔═════════════════════════════════════════════╗
+║    EMBFinder — Embroidery Visual Search     ║
+║    Version 1.0.0-beta | Local-First AI      ║
+╚═════════════════════════════════════════════╝`)
 
 	// ── Database ────────────────────────────────────────────────────────────────
 	if err := initDB(Config.DBPath); err != nil {
@@ -40,8 +41,11 @@ func main() {
 	// ── Drive detection ────────────────────────────────────────────────────────
 	log.Printf("Auto-detected drives: %d", len(autoLibPaths()))
 
-	// ── Auto-start Python embedder (ViT-L/14) ─────────────────────────────────
+	// ── Auto-start Python embedder (MobileCLIP-B) ──────────────────────────────
 	go autoStartEmbedder()
+
+	// ── Validate Wilcom Automation Engine ──────────────────────────────────────
+	go checkWilcom()
 
 	// ── Local CLIP ONNX (Disabled) ─────────────────────────────
 	// We use the Python embedder (ViT-L/14, 768-dim) exclusively for maximum accuracy.
@@ -95,13 +99,15 @@ func autoStartEmbedder() {
 	// Locate the embedder directory relative to the binary or common paths
 	script := findEmbedderScript()
 	if script == "" {
-		log.Printf("Python embedder: script not found — indexing EMB files will be skipped")
+		log.Printf("\033[31mCRITICAL ERROR: Python embedder script (main.py) not found!\033[0m")
+		log.Printf("\033[31mIndexing features will be COMPLETELY disabled.\033[0m")
 		return
 	}
 
 	python := findPython()
 	if python == "" {
-		log.Printf("Python embedder: python3 not found — install Python 3.9+")
+		log.Printf("\033[31mCRITICAL ERROR: Python 3.9+ is strictly required but was not found on your system.\033[0m")
+		log.Printf("\033[33mACTION REQUIRED: Install Python and ensure it is added to your system PATH.\033[0m")
 		return
 	}
 
@@ -127,16 +133,18 @@ func autoStartEmbedder() {
 	}
 	log.Printf("Python embedder: pid=%d — waiting for startup…", cmd.Process.Pid)
 
-	// Wait up to 120s for the model to load (ViT-L/14 first download is large)
+	// Wait up to 120s for the model to load (MobileCLIP-B first download)
 	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(2 * time.Second)
 		if embedderAlive() {
-			log.Printf("Python embedder: ✓ ready (ViT-L/14)")
+			log.Printf("\033[32mSUCCESS: MobileCLIP-B Engine is ready and online!\033[0m")
 			return
 		}
 	}
-	log.Printf("Python embedder: startup timeout — will retry on first search")
+
+	log.Printf("\033[33mWARNING: Python embedder startup timeout! Image vectorization may fail.\033[0m")
+	log.Printf("\033[33mACTION REQUIRED: Ensure Python 3.9+ is installed and 'pip install -r embedder/requirements.txt' was run.\033[0m")
 }
 
 func embedderAlive() bool {
@@ -171,7 +179,7 @@ func findEmbedderScript() string {
 	return ""
 }
 
-// findPython returns the first available Python 3 interpreter.
+// findPython returns the first available Python 3 interpreter that is 3.9 or higher.
 func findPython() string {
 	names := []string{"python3", "python"}
 	if runtime.GOOS == "windows" {
@@ -179,8 +187,29 @@ func findPython() string {
 	}
 	for _, name := range names {
 		if p, err := exec.LookPath(name); err == nil {
-			return p
+			// Validate version >= 3.9
+			cmd := exec.Command(p, "-c", "import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)")
+			if err := cmd.Run(); err == nil {
+				return p
+			}
 		}
 	}
 	return ""
+}
+
+// checkWilcom pings the Wilcom service to ensure it's responsive.
+func checkWilcom() {
+	time.Sleep(5 * time.Second) // Give it a moment to boot if running locally
+
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(wilcomSvcURL() + "/health")
+	if err != nil || resp.StatusCode != 200 {
+		log.Printf("\033[33mWARNING: Wilcom Automation Server is offline or unreachable at %s\033[0m", wilcomSvcURL())
+		log.Printf("\033[33m-> Reading .EMB files will be skipped. Ensure the wilcom server is running if needed.\033[0m")
+		return
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+	log.Printf("\033[32mSUCCESS: Wilcom Automation Server is connected and ready!\033[0m")
 }
