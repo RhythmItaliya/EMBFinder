@@ -7,9 +7,12 @@ ENV/
 
 # Go
 bin/
-go-server/embfinder
-go-server/embfinder.exe
-go-server/embfinder_test
+**/embfind
+**/embfind.exe
+**/embfind_test
+**/embfinder
+**/embfinder.exe
+**/embfinder_test
 *.test
 *.prof
 
