@@ -1,0 +1,46 @@
+# GoReleaser — builds EMBFind as native .exe / .deb / .dmg
+# Run: goreleaser release --snapshot --clean
+project_name: embfind
+
+builds:
+  - id: embfind
+    dir: go-server
+    binary: embfind
+    env: [CGO_ENABLED=0]
+    goos:  [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags: ["-s", "-w", "-X main.version={{.Version}}"]
+
+archives:
+  - id: embfind
+    builds: [embfind]
+    name_template: "embfind_{{.Version}}_{{.Os}}_{{.Arch}}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+nfpms:
+  - package_name: embfind
+    homepage: https://github.com/yourorg/embfind
+    description: "Embroidery Visual Search Engine"
+    maintainer: "EMBFind"
+    license: MIT
+    formats: [deb, rpm, apk]
+    bindir: /usr/local/bin
+
+dmgbuild:
+  - name: EMBFind
+    volume_name: EMBFind
+    output_path: "dist/EMBFind_{{.Version}}.dmg"
+    files:
+      - src: "dist/embfind_{{.Version}}_darwin_amd64/embfind"
+        dst: EMBFind
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{.Tag}}-dev"

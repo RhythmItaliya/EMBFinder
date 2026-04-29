@@ -1,0 +1,65 @@
+version: "3.9"
+# ─────────────────────────────────────────────────────────────────────────────
+# EMBFind — docker compose up --build
+# Edit .env to set your embroidery folder path.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  embfind:
+    build: ./go-server
+    image: embfind:latest
+    container_name: embfind
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - embfind_data:/data
+      - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
+    environment:
+      EMBEDDER_URL: http://embedder:8766
+      WILCOM_URL: http://wilcom:8767
+    depends_on:
+      embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8765/api/status || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  embedder:
+    build: ./embedder
+    image: embfind-embedder:latest
+    container_name: embfind-embedder
+    restart: unless-stopped
+    volumes:
+      - clip_cache:/root/.cache
+      - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8766/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  wilcom:
+    build:
+      context: ./wilcom
+      args:
+        ES_INSTALLER: ""
+        SKIP_ES: "1"
+    image: embfind-wilcom:latest
+    container_name: embfind-wilcom
+    restart: unless-stopped
+    volumes:
+      - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
+    shm_size: 256m
+    cap_add:
+      - SYS_PTRACE
+    profiles:
+      - wilcom
+
+volumes:
+  embfind_data:
+  clip_cache:

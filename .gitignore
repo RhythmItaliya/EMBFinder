@@ -1,0 +1,62 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Go
+bin/
+go-server/embfind
+go-server/embfind.exe
+go-server/embfind_test
+*.test
+*.prof
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Database / Models
+*.db
+*.sqlite
+*.sqlite3
+*.safetensors
+*.bin
+*.pt
+*.pth
+.cache/
+
+# Electron / Node
+node_modules/
+dist/
+dist-electron/
+release/
+*.log
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
