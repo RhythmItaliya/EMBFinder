@@ -1,66 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>EMBFinder</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data:; connect-src 'self' http://127.0.0.1:8765 http://localhost:8765;">
+  <title>EMBFinder — Local Visual Search</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 </head>
 <body>
 
 <div class="app">
-
-  <!-- ── Header ──────────────────────────────────────────────── -->
+  <!-- ── Header ────────────────────────────────────────────────── -->
   <header class="header">
-    <div class="header__logo">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <circle cx="10" cy="10" r="8.5" stroke="var(--c-accent)" stroke-width="1.4"/>
-        <circle cx="10" cy="10" r="3.5" stroke="var(--c-accent)" stroke-width="1.4"/>
-        <circle cx="10" cy="10" r="1.2" fill="var(--c-accent)"/>
-        <path d="M1.5 10h17M10 1.5c0 0 2.5 2.8 2.5 8.5S10 18.5 10 18.5M10 1.5c0 0-2.5 2.8-2.5 8.5S10 18.5 10 18.5" stroke="var(--c-accent)" stroke-width="0.9" opacity="0.35"/>
-      </svg>
-      EMB<em>Find</em>
-    </div>
-
-    <div class="header__sep"></div>
-
-    <div class="header__status">
-      <div class="dot dot--spin" id="dot"></div>
-      <span id="statusTxt">Connecting…</span>
-    </div>
-
-    <div class="header__end">
-    </div>
+    <div class="header__logo">@EMBFind<em>er</em></div>
+    <div class="dot" id="dot"></div>
+    <span class="status-txt" id="statusTxt">Connecting...</span>
   </header>
 
-  <!-- ── Sidebar ─────────────────────────────────────────────── -->
-  <aside class="sidebar is-open" id="sidebar">
-    <div class="sidebar__scroll">
-
-      <!-- Drives -->
+  <!-- ── Sidebar ────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar__scroll-area">
       <section>
-        <div class="section-label">Your Drives &amp; Volumes (Auto-Indexed)</div>
+        <div class="section-label">Your Drives & Volumes</div>
         <div class="drive-list" id="driveList">
-          <div class="color-muted" style="font-size:11px;padding:4px 2px">Detecting drives…</div>
+          <div class="color-muted" style="font-size:12px">Detecting drives…</div>
         </div>
       </section>
 
-      <div class="switch-row">
-        <div style="display:flex;flex-direction:column;gap:2px">
-           <span style="font-weight:600;font-size:12px">Real-time Indexing</span>
-           <span style="font-size:10px;color:var(--c-muted)">Auto-sync changes in drives</span>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="autoIndexCheck" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <!-- Formats -->
       <section>
         <div class="section-label">Supported Formats</div>
         <div class="tag-wrap" id="fmtWrap">
-          <div class="color-muted" style="font-size:11px">Loading…</div>
+          <div class="color-muted" style="font-size:12px">Loading…</div>
         </div>
       </section>
 
@@ -76,113 +49,103 @@
         </div>
       </div>
 
-      <div class="divider"></div>
-
       <section>
         <div class="section-label">Library Stats</div>
         <div id="formatCounts" class="tag-wrap" style="padding:5px 0">
-          <span style="font-size:11px;color:var(--c-muted)">No data indexed yet...</span>
+          <span style="font-size:12px;color:var(--c-muted)">Waiting for Sync...</span>
         </div>
       </section>
 
       <div class="divider"></div>
 
+      <button class="btn btn--outline btn--full" id="syncToggleBtn" style="margin-bottom:8px">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M10 9v6m4-6v6m7-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+        <span id="syncToggleText">Stop Sync</span>
+      </button>
+
       <button class="btn btn--danger btn--full" id="clearBtn">
         <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3.5h10"/><path d="M4.5 3.5V2.5h5v1"/><path d="M3 3.5l.8 8.5h6.4L11 3.5"/></svg>
         Clear All Indexed Data
       </button>
-
     </div>
   </aside>
 
   <!-- ── Main ────────────────────────────────────────────────── -->
   <main class="main">
-
-    <!-- Search / Upload zone -->
     <div class="search-bar">
       <div class="drop-zone" id="dropZone">
-        <input type="file" id="fileInput" accept="image/*" capture="environment">
-
-        <!-- Empty placeholder -->
+        <input type="file" id="fileInput" accept="image/*" hidden>
         <div class="dz-empty" id="dzEmpty">
-          <div class="dz-empty__icon">
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4">
-              <circle cx="14" cy="14" r="9"/>
-              <path d="M21 21L29 29" stroke-linecap="round"/>
-              <circle cx="14" cy="14" r="4" opacity=".35"/>
-            </svg>
-          </div>
-          <div class="dz-empty__primary">Upload, drag &amp; drop, or paste an image</div>
-          <div class="dz-empty__hint">JPG · PNG · WEBP · any photo — finds matching embroidery designs</div>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--c-border)" stroke-width="1.5" style="margin-bottom:8px">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+          </svg>
+          <div style="font-size:16px;font-weight:600">Upload or Drag & Drop an Image</div>
+          <div style="font-size:13px;color:var(--c-muted)">JPG · PNG · WEBP — finds matching embroidery designs</div>
         </div>
-
-        <!-- Preview (visible after selection) -->
         <div class="dz-preview" id="dzPreview">
-          <img class="dz-preview__thumb" id="previewThumb" alt="Query image">
+          <img id="previewThumb" class="dz-preview__thumb">
           <div>
-            <div class="dz-preview__name" id="previewName">image.jpg</div>
-            <div class="dz-preview__change" id="changeImg">Change image</div>
+            <div id="previewName" style="font-weight:700;font-size:14px">image.jpg</div>
+            <div style="font-size:12px;color:var(--c-muted)">Ready to search</div>
           </div>
         </div>
       </div>
-
-        <button class="btn btn--primary" id="searchBtn" disabled>
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="7" cy="7" r="5"/>
-            <path d="M11 11l3.5 3.5" stroke-linecap="round"/>
+      
+      <div class="search-bar__actions">
+        <button class="btn btn--primary btn--full" id="searchBtn" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:8px">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
           </svg>
-          Search
+          Search Library
         </button>
-        <span class="search-bar__status" id="searchStatus"></span>
       </div>
     </div>
 
-    <!-- Results topbar -->
-    <div class="results-bar">
-      <span class="results-bar__title" id="resultsTitle">Ready</span>
-      <span class="results-bar__meta" id="resultsMeta"></span>
-    </div>
-
-    <!-- Searching indicator -->
     <div class="searching-bar" id="searchingBar">
-      <div class="spinner"></div>
-      <span>Searching <strong id="searchCount">0</strong> designs…</span>
+      <div class="dot dot--ok" style="width:6px;height:6px"></div>
+      Searching entire library...
     </div>
 
-    <!-- Results grid -->
+    <div class="results-bar">
+      <div id="resultsTitle">Initializing...</div>
+      <div id="searchTime" style="font-family:var(--mono);font-size:11px;color:var(--c-muted)"></div>
+    </div>
+
     <div class="grid-wrap">
-      <div class="grid" id="grid"></div>
-
-      <div class="empty" id="emptyState" style="display:none">
-        <div class="empty__icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5">
-            <circle cx="21" cy="21" r="13"/>
-            <path d="M30 30L43 43" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <div class="empty__title">No similar designs found</div>
-        <div class="empty__hint">Try a different image, or index more files via the library panel.</div>
-      </div>
+      <div class="grid" id="resultsGrid"></div>
     </div>
-
   </main>
+</div>
 
-</div><!-- /.app -->
-
-<!-- ── Modal ───────────────────────────────────────────────────── -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
-    <button class="btn btn--icon modal__close" id="modalClose">
-      <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8">
-        <path d="M1 1l10 10M11 1L1 11" stroke-linecap="round"/>
-      </svg>
-    </button>
-    <div class="modal__body" id="modalBody"></div>
+    <div class="modal__body">
+      <div class="modal__preview">
+        <img id="modalImg" src="">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <h2 id="modalTitle" style="font-size:18px;font-weight:800">Design Name</h2>
+        <div style="display:flex;gap:12px;font-size:13px;color:var(--c-muted)">
+          <span id="modalPath">/path/to/design</span>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="card" style="padding:12px;cursor:default">
+          <div class="section-label">Format</div>
+          <div id="modalFormat" style="font-weight:700">DST</div>
+        </div>
+        <div class="card" style="padding:12px;cursor:default">
+          <div class="section-label">Size</div>
+          <div id="modalSize" style="font-weight:700">45 KB</div>
+        </div>
+      </div>
+      <button class="btn btn--primary btn--full" id="openFolderBtn">Open in File Explorer</button>
+    </div>
   </div>
 </div>
 
-<!-- ── Toast stack ──────────────────────────────────────────────── -->
-<div class="toast-stack" id="toastStack"></div>
+<div id="toast" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--c-text);color:#fff;padding:10px 20px;border-radius:40px;font-size:13px;font-weight:600;z-index:2000;display:none"></div>
 
 <script src="app.js"></script>
 </body>
