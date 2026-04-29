@@ -24,14 +24,13 @@ var Config appConfig
 
 // initConfig initializes configuration defaults, resolves port conflicts, and tunes GC.
 func initConfig() {
-	home, _ := os.UserHomeDir()
 
 	Config = appConfig{
 		Host:         "127.0.0.1",
 		Port:         "8765",
 		EmbedderHost: "127.0.0.1",
 		EmbedderPort: "8766",
-		DBPath:       filepath.Join(home, ".embfinder", "embfinder.db"),
+		DBPath:       filepath.Join("data", "embfinder.db"),
 		MaxWorkers:   runtime.NumCPU(),
 	}
 

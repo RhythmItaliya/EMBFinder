@@ -1,69 +1,33 @@
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
+# Build Artifacts
+go-server/embfind
+go-server/go-server
+electron/dist/
+electron/out/
 
-# Go
-bin/
-**/embfind
-**/embfind.exe
-**/embfind_test
-**/embfinder
-**/embfinder.exe
-**/embfinder_test
-*.test
-*.prof
+# Database & Storage
+go-server/data/*.db
+go-server/data/*.db-shm
+go-server/data/*.db-wal
+go-server/data/*.heapsnapshot
 
-# Graphify Documentation
-graphify-out/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.pytest_cache/
-.coverage
-htmlcov/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Database / Models
-*.db
-*.sqlite
-*.sqlite3
-*.safetensors
-*.bin
-*.pt
-*.pth
-.cache/
-
-# Electron / Node
+# Dependencies
 node_modules/
-dist/
-dist-electron/
-release/
-*.log
+.venv/
+__pycache__/
+*.pyc
 
-# OS / Editor
+# Local Environment
+.env
+.env.local
 .DS_Store
-.idea/
 .vscode/
-*.swp
-*.swo
+.idea/
 
+# Large Model Data
+embedder/MobileCLIP-B*
+*.onnx
+*.bin
+
+# Logs
+*.log
+go-server/logs/

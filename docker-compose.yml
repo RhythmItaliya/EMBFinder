@@ -47,18 +47,30 @@ services:
     build:
       context: ./emb-engine
       args:
-        ES_INSTALLER: ""
-        SKIP_ES: "1"
-    image: embfinder-emb-engine:latest
-    container_name: embfinder-emb-engine
+        # 1. Extract your installer to emb-engine/ folder
+        # 2. Set the filename here (e.g., setup.exe or 1.exe)
+        ES_INSTALLER: "1.exe" 
+        SKIP_ES: "0"
+    container_name: emb-engine
     restart: unless-stopped
+    ports:
+      - "8767:8767"
+    environment:
+      - EMB_ENGINE_DIR=Wilcom # Adjust if your installation folder is different
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8767/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    image: embfinder-emb-engine:latest
     volumes:
       - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
-    shm_size: 256m
+      - ./emb-engine/installer:/installer
+    shm_size: 512m
     cap_add:
       - SYS_PTRACE
-    profiles:
-      - emb-engine
+    # Removed profiles to ensure it runs by default for management
+
 
 volumes:
   embfinder_data:
