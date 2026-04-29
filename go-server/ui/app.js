@@ -46,7 +46,6 @@ let indexedCount = 0;
 (async function boot() {
   wireDropZone();
   wirePaste();
-  wireSidebar();
   wireActions();
   await Promise.all([refreshStatus(), loadDrives()]);
 })();
@@ -65,13 +64,21 @@ async function refreshStatus() {
       ? indexedCount.toLocaleString() + ' designs indexed — upload an image to search'
       : 'No designs indexed — use the panel to index your library';
     $('searchCount').textContent = indexedCount.toLocaleString();
-    if (d.indexing) startPoll(); else stopPoll();
+    
+    // Stats
+    $('indexedCount').textContent = d.total_indexed.toLocaleString();
+
+    // Counts breakdown
+    if (d.idx_state.counts) {
+      renderCounts(d.idx_state.counts);
+    }
+
+    if (d.idx_state.running) startPoll(); else stopPoll();
   } catch {
     $('statusTxt').textContent = 'Offline';
     $('dot').className = 'dot dot--err';
   }
 }
-$('refreshBtn').addEventListener('click', refreshStatus);
 
 // ── Drives & formats ──────────────────────────────────────────
 async function loadDrives() {
@@ -89,27 +96,15 @@ function renderDrives(drives) {
     return;
   }
   list.innerHTML = '';
-  drives.forEach((drv, i) => {
+  drives.forEach((drv) => {
     const item = document.createElement('div');
     item.className = 'drive-item';
     item.dataset.path = drv.path;
     item.innerHTML =
       '<span class="drive-item__icon">' + driveIcon(drv.path) + '</span>' +
       '<span class="drive-item__label" title="' + esc(drv.path) + '">' + esc(drv.label) + '</span>';
-    item.addEventListener('click', () => selectDrive(drv.path, item));
     list.appendChild(item);
-    // Auto-select first drive
-    if (i === 0) selectDrive(drv.path, item);
   });
-}
-
-function selectDrive(path, el) {
-  document.querySelectorAll('.drive-item').forEach(i => i.classList.remove('is-selected'));
-  el.classList.add('is-selected');
-  $('folderInput').value = path;
-  $('indexBtn').disabled = false;
-  $('scanInfo').style.display = 'none';
-  autoScan(path);
 }
 
 function driveIcon(path) {
@@ -126,92 +121,25 @@ function renderFormats(fmts) {
   $('fmtWrap').innerHTML = [...emb, ...img].map(f => `<span class="tag">${esc(f)}</span>`).join('');
 }
 
-// ── Auto scan ─────────────────────────────────────────────────
-async function autoScan(folder) {
-  if (!folder) return;
-  try {
-    const d = await apiGet('/api/scan?folder=' + encodeURIComponent(folder));
-    showScanResult(d);
-  } catch { /* silent */ }
-}
-
-// ── Manual scan ───────────────────────────────────────────────
-$('scanBtn').addEventListener('click', async () => {
-  const folder = $('folderInput').value.trim();
-  if (!folder) return;
-  $('scanBtn').textContent = '…'; $('scanBtn').disabled = true;
-  try {
-    const d = await apiGet('/api/scan?folder=' + encodeURIComponent(folder));
-    showScanResult(d);
-    $('indexBtn').disabled = !d.total_files;
-  } catch (e) { toast(e.message, 'err'); }
-  finally { $('scanBtn').textContent = 'Scan'; $('scanBtn').disabled = false; }
-});
-
-function showScanResult(d) {
-  const box = $('scanInfo');
-  box.style.display = 'block';
-  if (d.error) {
-    box.innerHTML = `<div class="info-box info-box--err">${esc(d.error)}</div>`;
-    return;
-  }
-  const tags = Object.entries(d.formats || {})
-    .map(([k, v]) => `<span class="tag">.${esc(k)} (${v})</span>`).join('');
-  box.innerHTML = `<div class="info-box"><strong>${(d.total_files || 0).toLocaleString()} files found</strong><div class="tag-wrap" style="margin-top:6px">${tags || '<span class="color-muted" style="font-size:11px">No supported files</span>'}</div></div>`;
-  $('indexBtn').disabled = !d.total_files;
-}
-
-$('folderInput').addEventListener('input', () => {
-  $('indexBtn').disabled = !$('folderInput').value.trim();
-  $('scanInfo').style.display = 'none';
-});
-
-// ── Index ─────────────────────────────────────────────────────
-$('indexBtn').addEventListener('click', async () => {
-  const folder = $('folderInput').value.trim();
-  if (!folder) return;
-  $('indexBtn').disabled = true;
-  logLen = 0;
-  $('logBox').innerHTML = '';
-  $('progFill').style.width = '0';
-  $('progressWrap').style.display = 'block';
-  try {
-    const fd = new FormData();
-    fd.append('folder', folder);
-    fd.append('force', $('forceCheck').checked ? 'true' : 'false');
-    const d = await apiPost('/api/index', fd);
-    if (d.error) { toast(d.error, 'err'); $('indexBtn').disabled = false; return; }
-    startPoll();
-  } catch (e) { toast(e.message, 'err'); $('indexBtn').disabled = false; }
-});
-
-function startPoll() { if (!pollTimer) pollTimer = setInterval(pollIndex, 600); }
+function startPoll() { if (!pollTimer) pollTimer = setInterval(pollIndex, 1000); }
 function stopPoll()  { clearInterval(pollTimer); pollTimer = null; }
 
 async function pollIndex() {
   try {
     const d = await apiGet('/api/index/state');
-    const { progress = 0, total = 0, status, log = [] } = d;
-    const pct = total > 0 ? Math.round(progress / total * 100) : 0;
-    $('progFill').style.width = pct + '%';
-    $('progLabel').textContent = status === 'done' ? '✓ Done' : `Indexing ${pct}%`;
-    $('progCount').textContent = `${progress} / ${total}`;
-    const box = $('logBox');
-    log.slice(logLen).forEach(line => {
-      const div = document.createElement('div');
-      div.textContent = line;
-      div.className = line.startsWith('OK') ? 'log--ok' : line.startsWith('FAIL') ? 'log--fail' : 'log--skip';
-      box.appendChild(div);
-    });
-    logLen = log.length;
-    if (logLen) box.scrollTop = box.scrollHeight;
-    if (!d.running && status === 'done') {
+    const { progress = 0, total = 0, status } = d;
+    if (!d.running && status !== 'running') {
       stopPoll();
-      $('indexBtn').disabled = false;
+      $('progressWrap').style.display = 'none';
       await refreshStatus();
-      toast('Indexing complete ✓');
+      return;
     }
-  } catch { stopPoll(); $('indexBtn').disabled = false; }
+    const pct = total > 0 ? Math.round(progress / total * 100) : 0;
+    $('progressWrap').style.display = 'block';
+    $('progFill').style.width = pct + '%';
+    $('progLabel').textContent = status === 'done' ? '✓ Finished' : `Auto-Updating...`;
+    $('progCount').textContent = `${progress} / ${total}`;
+  } catch { stopPoll(); }
 }
 
 // ── Clear ─────────────────────────────────────────────────────
@@ -277,18 +205,11 @@ function setImage(f) {
   if (indexedCount > 0) doSearch();
 }
 
-// ── Sidebar toggle (mobile) ───────────────────────────────────
-function wireSidebar() {
-  $('sidebarToggle').addEventListener('click', () => {
-    const sb = $('sidebar');
-    const open = sb.classList.toggle('is-open');
-    $('sidebarToggle').classList.toggle('is-active', open);
-  });
-}
 
 // ── Wire misc buttons ─────────────────────────────────────────
 function wireActions() {
   $('searchBtn').addEventListener('click', doSearch);
+  
 }
 
 // ── Search ────────────────────────────────────────────────────
@@ -309,7 +230,7 @@ async function doSearch() {
   try {
     const fd = new FormData();
     fd.append('file', queryFile);
-    fd.append('top_k', '30');
+    fd.append('top_k', '40');
     const d = await apiPost('/api/search', fd);
     const ms = Date.now() - t0;
 
@@ -384,3 +305,16 @@ $('modalClose').addEventListener('click', closeModal);
 $('modalBg').addEventListener('click', e => { if (e.target === $('modalBg')) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 function closeModal() { $('modalBg').classList.remove('is-open'); }
+
+function renderCounts(counts) {
+  const container = $('formatCounts');
+  if (!container) return;
+  container.innerHTML = '';
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  sorted.forEach(([ext, count]) => {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = `<b>${ext.toUpperCase()}</b>: ${count.toLocaleString()}`;
+    container.appendChild(tag);
+  });
+}

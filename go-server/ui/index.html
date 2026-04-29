@@ -30,19 +30,6 @@
     </div>
 
     <div class="header__end">
-      <!-- Toggle sidebar on mobile -->
-      <button class="btn btn--icon" id="sidebarToggle" title="Toggle library panel">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="1" y="1" width="6" height="14" rx="1"/>
-          <path d="M10 4h5M10 8h5M10 12h5" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <button class="btn btn--icon" id="refreshBtn" title="Refresh">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 3.9 1.6" stroke-linecap="round"/>
-          <path d="M13.5 2v3.5h-3.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
     </div>
   </header>
 
@@ -52,21 +39,22 @@
 
       <!-- Drives -->
       <section>
-        <div class="section-label">Your Drives &amp; Volumes</div>
+        <div class="section-label">Your Drives &amp; Volumes (Auto-Indexed)</div>
         <div class="drive-list" id="driveList">
           <div class="color-muted" style="font-size:11px;padding:4px 2px">Detecting drives…</div>
         </div>
       </section>
 
-      <!-- Manual path -->
-      <section>
-        <div class="section-label">Or Enter Path Manually</div>
-        <div class="input-row">
-          <input class="input" type="text" id="folderInput" placeholder="/path/to/embroidery">
-          <button class="btn" id="scanBtn">Scan</button>
+      <div class="switch-row">
+        <div style="display:flex;flex-direction:column;gap:2px">
+           <span style="font-weight:600;font-size:12px">Real-time Indexing</span>
+           <span style="font-size:10px;color:var(--c-muted)">Auto-sync changes in drives</span>
         </div>
-        <div id="scanInfo" style="margin-top:8px;display:none"></div>
-      </section>
+        <label class="switch">
+          <input type="checkbox" id="autoIndexCheck" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
 
       <!-- Formats -->
       <section>
@@ -76,28 +64,26 @@
         </div>
       </section>
 
-      <label class="check-row">
-        <input type="checkbox" id="forceCheck">
-        Force re-index all files
-      </label>
-
-      <button class="btn btn--primary btn--full" id="indexBtn" disabled>
-        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 1v12M1 7h12" stroke-linecap="round"/></svg>
-        Start Indexing
-      </button>
-
       <div id="progressWrap" style="display:none">
         <div class="progress">
           <div class="progress__meta">
-            <span id="progLabel">Indexing…</span>
+            <span id="progLabel">Auto-Updating…</span>
             <span id="progCount" style="font-family:var(--mono)">0 / 0</span>
           </div>
           <div class="progress__track">
             <div class="progress__fill" id="progFill"></div>
           </div>
-          <div class="log-box" id="logBox"></div>
         </div>
       </div>
+
+      <div class="divider"></div>
+
+      <section>
+        <div class="section-label">Library Stats</div>
+        <div id="formatCounts" class="tag-wrap" style="padding:5px 0">
+          <span style="font-size:11px;color:var(--c-muted)">No data indexed yet...</span>
+        </div>
+      </section>
 
       <div class="divider"></div>
 
@@ -140,7 +126,6 @@
         </div>
       </div>
 
-      <div class="search-bar__actions">
         <button class="btn btn--primary" id="searchBtn" disabled>
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="7" cy="7" r="5"/>

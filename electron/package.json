@@ -6,7 +6,7 @@
   "description": "EMBFinder - Embroidery Visual Search",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "electron . --no-sandbox",
     "build-win": "electron-builder --win",
     "build-mac": "electron-builder --mac",
     "build-linux": "electron-builder --linux deb"
