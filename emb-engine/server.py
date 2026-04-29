@@ -28,9 +28,11 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-WINE_PREFIX = os.environ.get("WINEPREFIX", "/root/.wine-emb-engine")
+# Default to a user-local Wine prefix if not in Docker
+DEFAULT_WINE_PREFIX = os.path.join(os.path.expanduser("~"), ".wine-emb-engine")
+WINE_PREFIX = os.environ.get("WINEPREFIX", DEFAULT_WINE_PREFIX)
 EMB_ENGINE_EXE  = os.environ.get("EMB_ENGINE_EXEC_PATH", "")
-EMB_ENGINE_DIR  = os.environ.get("EMB_ENGINE_DIR", "EmbEngine") # User should set this to their specific vendor folder
+EMB_ENGINE_DIR  = os.environ.get("EMB_ENGINE_DIR", "EmbEngine") 
 
 def find_es_exe() -> str:
     if EMB_ENGINE_EXE and Path(EMB_ENGINE_EXE).exists():

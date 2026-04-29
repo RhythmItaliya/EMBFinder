@@ -43,43 +43,64 @@ func linuxDrives() []DriveEntry {
 	var entries []DriveEntry
 	seen := map[string]bool{}
 
-	// Always include home dir
+	// 1. Home directory is priority
 	home, _ := os.UserHomeDir()
-	if home != "" && !seen[home] {
+	if home != "" {
 		entries = append(entries, DriveEntry{Path: home, Label: "Home (" + home + ")"})
 		seen[home] = true
 	}
 
+	// 2. Scan /proc/mounts for ACTIVE mounts
 	f, err := os.Open("/proc/mounts")
-	if err != nil {
-		return entries
-	}
-	defer f.Close()
+	if err == nil {
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			parts := strings.Fields(scanner.Text())
+			if len(parts) < 3 {
+				continue
+			}
+			mountPt := parts[1]
+			fsType := parts[2]
+			if skipFS[fsType] || seen[mountPt] {
+				continue
+			}
+			// Skip system paths but allow /media, /mnt, /run/media
+			isSystem := false
+			for _, pfx := range []string{"/sys", "/proc", "/dev", "/run/lock", "/snap", "/boot"} {
+				if strings.HasPrefix(mountPt, pfx) {
+					isSystem = true
+					break
+				}
+			}
+			if isSystem && !strings.HasPrefix(mountPt, "/run/media") && !strings.HasPrefix(mountPt, "/run/user") {
+				continue
+			}
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
-		if len(parts) < 3 {
-			continue
+			seen[mountPt] = true
+			entries = append(entries, DriveEntry{Path: mountPt, Label: driveLabel(mountPt), FSType: fsType})
 		}
-		mountPt := parts[1]
-		fsType := parts[2]
-		if skipFS[fsType] {
-			continue
-		}
-		// Skip kernel/system paths
-		for _, pfx := range []string{"/sys", "/proc", "/dev", "/run/lock", "/snap", "/boot", "/run/snapd"} {
-			if strings.HasPrefix(mountPt, pfx) {
-				goto next
+	}
+
+	// 3. Proactive Scan for common mount points /media/USER/*
+	user := os.Getenv("USER")
+	if user == "" {
+		user = "rhythm" // Fallback based on terminal
+	}
+	commonBases := []string{"/media/" + user, "/run/media/" + user, "/mnt"}
+	for _, base := range commonBases {
+		files, _ := os.ReadDir(base)
+		for _, f := range files {
+			if f.IsDir() {
+				p := filepath.Join(base, f.Name())
+				if !seen[p] {
+					entries = append(entries, DriveEntry{Path: p, Label: "📀 " + f.Name()})
+					seen[p] = true
+				}
 			}
 		}
-		if seen[mountPt] {
-			continue
-		}
-		seen[mountPt] = true
-		entries = append(entries, DriveEntry{Path: mountPt, Label: driveLabel(mountPt), FSType: fsType})
-	next:
 	}
+
 	return entries
 }
 

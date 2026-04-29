@@ -38,8 +38,20 @@ func main() {
 	}
 	log.Printf("Loaded %d designs into memory index", globalIndex.Count())
 
-	// ── Drive detection ────────────────────────────────────────────────────────
+	// ── Drive detection & Auto-Indexing ──────────────────────────────────────
 	log.Printf("Auto-detected drives: %d", len(autoLibPaths()))
+
+	// First-time auto-index: Disabled as per user request for manual control
+	/*
+	if dbCount() == 0 {
+		log.Printf("DATABASE EMPTY: Triggering first-time full system scan...")
+		AutoIndexAllDrives()
+	}
+	*/
+
+	// Start real-time filesystem watcher
+	log.Printf("Starting background filesystem watcher...")
+	StartWatcher()
 
 	// ── Auto-start Python embedder (MobileCLIP-B) ──────────────────────────────
 	go autoStartEmbedder()
@@ -61,20 +73,9 @@ func main() {
 			"formats": AllSupportedFormats(),
 		})
 	})
-	mux.HandleFunc("/api/scan", hScan)
 	mux.HandleFunc("/api/search", hSearch)
 	mux.HandleFunc("/api/preview/", hPreview)
 	mux.HandleFunc("/api/index/state", hIndexState)
-	mux.HandleFunc("/api/index", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			hIndex(w, r)
-		case http.MethodDelete:
-			hClear(w, r)
-		default:
-			http.Error(w, "method not allowed", 405)
-		}
-	})
 
 	// Serve embedded UI
 	uiFS, _ := fs.Sub(uiFiles, "ui")

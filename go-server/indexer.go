@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ── Supported formats ─────────────────────────────────────────────────────────
@@ -39,8 +40,7 @@ var imageExts = map[string]bool{
 }
 
 func isSupportedExt(ext string) bool {
-	e := strings.ToLower(ext)
-	return embroideryExts[e] || imageExts[e]
+	return isEmbExt(ext)
 }
 
 func isImageExt(ext string) bool { return imageExts[strings.ToLower(ext)] }
@@ -65,19 +65,21 @@ func embEngineSvcURL() string {
 	if u := os.Getenv("EMB_ENGINE_URL"); u != "" {
 		return u
 	}
-	return "http://emb-engine:8767"
+	// Default to localhost for local development, Docker overrides this via ENV
+	return "http://localhost:8767"
 }
 
 // ── IndexState ────────────────────────────────────────────────────────────────
 type IndexState struct {
 	mu          sync.RWMutex
-	Running     bool     `json:"running"`
-	Progress    int32    `json:"-"`
-	Total       int      `json:"total"`
-	CurrentFile string   `json:"current_file"`
-	Status      string   `json:"status"`
-	Log         []string `json:"log"`
-	ErrMsg      string   `json:"error,omitempty"`
+	Running     bool           `json:"running"`
+	Progress    int32          `json:"-"`
+	Total       int            `json:"total"`
+	CurrentFile string         `json:"current_file"`
+	Status      string         `json:"status"`
+	Log         []string       `json:"log"`
+	ErrMsg      string         `json:"error,omitempty"`
+	Counts      map[string]int `json:"counts"`
 }
 
 func (s *IndexState) snap() map[string]interface{} {
@@ -93,6 +95,7 @@ func (s *IndexState) snap() map[string]interface{} {
 		"status":       s.Status,
 		"log":          logCopy,
 		"error":        s.ErrMsg,
+		"counts":       s.Counts,
 	}
 }
 
@@ -248,10 +251,31 @@ func resizeForPreview(b []byte) []byte {
 // orchestrates AI embedding, and stores the results in the local SQLite database.
 func StartIndexing(folder string, force bool) {
 	files := findFiles(folder)
+	
+	var toIndex []string
+	if force {
+		toIndex = files
+	} else {
+		for _, fp := range files {
+			if !dbIndexed(fileID(fp)) {
+				toIndex = append(toIndex, fp)
+			}
+		}
+	}
 
 	idxState.mu.Lock()
 	idxState.Running = true
-	idxState.Total = len(files)
+	idxState.Total = len(toIndex)
+	idxState.Status = "Counting formats..."
+	
+	extCounts := make(map[string]int)
+	for _, p := range toIndex {
+		ext := strings.ToLower(filepath.Ext(p))
+		if ext != "" {
+			extCounts[ext[1:]]++
+		}
+	}
+	idxState.Counts = extCounts
 	idxState.Log = nil
 	idxState.ErrMsg = ""
 	idxState.Status = "running"
@@ -337,5 +361,38 @@ func StartIndexing(folder string, force bool) {
 			}()
 		}
 		wg.Wait()
+	}()
+}
+// AutoIndexAllDrives scans all auto-detected system drives and indexes them in the background.
+// It processes drives sequentially to avoid system overload.
+func AutoIndexAllDrives() {
+	drives := autoLibPaths()
+	if len(drives) == 0 {
+		return
+	}
+
+	go func() {
+		for _, d := range drives {
+			// Skip root and home to avoid massive slow scans unless specifically requested
+			if d.Path == "/" || strings.HasPrefix(d.Path, "/home") {
+				continue
+			}
+			
+			// We wait for each drive to finish before starting the next
+			// but we need a way to know when StartIndexing finishes.
+			// For now, we'll just trigger them with a small delay or improve the indexer logic.
+			StartIndexing(d.Path, false) // false = only new files
+			
+			// Wait for the indexer to become idle before moving to the next drive
+			for {
+				time.Sleep(5 * time.Second)
+				idxState.mu.RLock()
+				running := idxState.Running
+				idxState.mu.RUnlock()
+				if !running {
+					break
+				}
+			}
+		}
 	}()
 }

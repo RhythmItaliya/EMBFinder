@@ -190,8 +190,8 @@ def _render_pystitch(file_path: Path, canvas: int = 512) -> Optional[Image.Image
 
         pattern = pystitch.read(str(file_path))
         pattern.move_center_to_origin()
-    except Exception as e:
-        print(f"[Embedder] pystitch: {e}")
+    except Exception:
+        # Silently fail to avoid log spam if pystitch is missing locally
         return None
 
     stitches = pattern.stitches

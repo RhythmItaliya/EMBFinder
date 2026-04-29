@@ -7,8 +7,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -54,49 +52,6 @@ func hStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── GET /api/scan?folder=... ──────────────────────────────────────────────────
-func hScan(w http.ResponseWriter, r *http.Request) {
-	folder := r.URL.Query().Get("folder")
-	if folder == "" {
-		writeJSON(w, errJSON("folder required"))
-		return
-	}
-	if _, err := os.Stat(folder); err != nil {
-		writeJSON(w, errJSON("not found: "+folder))
-		return
-	}
-	files := findFiles(folder)
-	counts := map[string]int{}
-	for _, f := range files {
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(f)), ".")
-		counts[ext]++
-	}
-	writeJSON(w, map[string]interface{}{
-		"folder": folder, "total_files": len(files), "formats": counts,
-	})
-}
-
-// ── POST /api/index ───────────────────────────────────────────────────────────
-func hIndex(w http.ResponseWriter, r *http.Request) {
-	if idxState.Running {
-		http.Error(w, "already indexing", 409)
-		return
-	}
-	r.ParseMultipartForm(1 << 20)
-	folder := r.FormValue("folder")
-	force := r.FormValue("force") == "true"
-	if folder == "" {
-		writeJSON(w, errJSON("folder required"))
-		return
-	}
-	if _, err := os.Stat(folder); err != nil {
-		writeJSON(w, errJSON("folder not found"))
-		return
-	}
-	StartIndexing(folder, force)
-	writeJSON(w, map[string]string{"status": "started"})
-}
-
 // ── GET /api/index/state ──────────────────────────────────────────────────────
 func hIndexState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, idxState.snap())
@@ -134,7 +89,7 @@ func hSearch(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	imgBytes, _ := io.ReadAll(file)
 
-	topK := 24
+	topK := 40
 	if k := r.FormValue("top_k"); k != "" {
 		if n, e := strconv.Atoi(k); e == nil && n > 0 {
 			topK = n
@@ -143,11 +98,8 @@ func hSearch(w http.ResponseWriter, r *http.Request) {
 
 	// ── Embed query image ─────────────────────────────────────────────────────
 	var vec []float32
-
-	// Strategy 1: local CLIP ONNX (fastest, no IPC)
 	vec, err = EmbedImageBytes(imgBytes)
 	if err != nil {
-		// Strategy 2: Python embedder (fallback, ~5ms extra over local)
 		vec, err = callEmbedImage(imgBytes, header.Filename)
 		if err != nil {
 			writeJSON(w, errJSON("embedding failed: "+err.Error()))

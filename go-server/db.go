@@ -106,3 +106,8 @@ func dbClear() int {
 	db.Exec("DELETE FROM designs")
 	return n
 }
+
+func dbRemoveByPath(path string) error {
+	_, err := db.Exec("DELETE FROM designs WHERE file_path=?", path)
+	return err
+}
