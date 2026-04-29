@@ -1,0 +1,24 @@
+{
+  "name": "embfind",
+  "version": "1.0.0",
+  "description": "EMBFind — Embroidery Visual Search",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux deb"
+  },
+  "build": {
+    "appId": "com.embfind.app",
+    "productName": "EMBFind",
+    "files": ["main.js", "preload.js"],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg" },
+    "linux": { "target": "deb", "category": "Graphics" }
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.0.0"
+  }
+}
