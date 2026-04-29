@@ -38,9 +38,9 @@ func hStatus(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 		}
 	}
-	wilcomOK := false
-	if resp, err := httpClient.Get(wilcomSvcURL() + "/health"); err == nil {
-		wilcomOK = resp.StatusCode == 200
+	embEngineOK := false
+	if resp, err := httpClient.Get(embEngineSvcURL() + "/health"); err == nil {
+		embEngineOK = resp.StatusCode == 200
 		resp.Body.Close()
 	}
 	writeJSON(w, map[string]interface{}{
@@ -48,7 +48,7 @@ func hStatus(w http.ResponseWriter, r *http.Request) {
 		"total_indexed":  globalIndex.Count(),
 		"embedder_ready": embedOK,
 		"clip_local":     clipReady,
-		"wilcom_ready":   wilcomOK,
+		"emb-engine_ready":   embEngineOK,
 		"indexing":       idxState.Running,
 		"auto_paths":     autoLibPaths(),
 	})

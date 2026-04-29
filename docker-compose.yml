@@ -18,7 +18,7 @@ services:
       - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
     environment:
       EMBEDDER_URL: http://embedder:8766
-      WILCOM_URL: http://wilcom:8767
+      EMB_ENGINE_URL: http://emb-engine:8767
     depends_on:
       embedder:
         condition: service_healthy
@@ -43,14 +43,14 @@ services:
       retries: 5
       start_period: 90s
 
-  wilcom:
+  emb-engine:
     build:
-      context: ./wilcom
+      context: ./emb-engine
       args:
         ES_INSTALLER: ""
         SKIP_ES: "1"
-    image: embfinder-wilcom:latest
-    container_name: embfinder-wilcom
+    image: embfinder-emb-engine:latest
+    container_name: embfinder-emb-engine
     restart: unless-stopped
     volumes:
       - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
@@ -58,7 +58,7 @@ services:
     cap_add:
       - SYS_PTRACE
     profiles:
-      - wilcom
+      - emb-engine
 
 volumes:
   embfinder_data:

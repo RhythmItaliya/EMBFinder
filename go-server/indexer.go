@@ -61,11 +61,11 @@ func AllSupportedFormats() []string {
 // ── Services ──────────────────────────────────────────────────────────────────
 // Python Embedder URL is now provided by Config.EmbedderURL()
 
-func wilcomSvcURL() string {
-	if u := os.Getenv("WILCOM_URL"); u != "" {
+func embEngineSvcURL() string {
+	if u := os.Getenv("EMB_ENGINE_URL"); u != "" {
 		return u
 	}
-	return "http://wilcom:8767"
+	return "http://emb-engine:8767"
 }
 
 // ── IndexState ────────────────────────────────────────────────────────────────
@@ -210,12 +210,12 @@ func callEmbedFile(path string) (*embedResp, error) {
 	return &r, nil
 }
 
-func callWilcomPreview(path string) []byte {
+func callEmbEnginePreview(path string) []byte {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	w.WriteField("file_path", path)
 	w.Close()
-	resp, err := httpClient.Post(wilcomSvcURL()+"/preview", w.FormDataContentType(), &buf)
+	resp, err := httpClient.Post(embEngineSvcURL()+"/preview", w.FormDataContentType(), &buf)
 	if err != nil {
 		return nil
 	}
@@ -296,10 +296,10 @@ func StartIndexing(folder string, force bool) {
 				idxState.CurrentFile = filepath.Base(fp)
 				idxState.mu.Unlock()
 
-				// High-quality Wilcom preview for .emb files
-				var wilcomPNG []byte
+				// High-quality EmbEngine preview for .emb files
+				var embEnginePNG []byte
 				if strings.ToLower(filepath.Ext(fp)) == ".emb" {
-					wilcomPNG = callWilcomPreview(fp)
+					embEnginePNG = callEmbEnginePreview(fp)
 				}
 
 				result, err := callEmbedFile(fp)
@@ -310,7 +310,7 @@ func StartIndexing(folder string, force bool) {
 					return
 				}
 
-				png := wilcomPNG
+				png := embEnginePNG
 				if png == nil && result.PreviewB64 != "" {
 					png, _ = base64.StdEncoding.DecodeString(result.PreviewB64)
 				}

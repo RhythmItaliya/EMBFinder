@@ -1,5 +1,5 @@
 """
-server.py — Wilcom ES e4.2 Preview Service
+server.py — EmbEngine ES e4.2 Preview Service
 Runs inside the Wine/Ubuntu Docker container.
 
 Endpoints:
@@ -13,19 +13,19 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-WINE_PREFIX = os.environ.get("WINEPREFIX", "/root/.wine-wilcom")
-WILCOM_EXE  = os.environ.get("WILCOM_EXEC_PATH", "")
+WINE_PREFIX = os.environ.get("WINEPREFIX", "/root/.wine-emb-engine")
+EMB_ENGINE_EXE  = os.environ.get("EMB_ENGINE_EXEC_PATH", "")
 
 def find_es_exe() -> str:
-    if WILCOM_EXE and Path(WILCOM_EXE).exists():
-        return WILCOM_EXE
+    if EMB_ENGINE_EXE and Path(EMB_ENGINE_EXE).exists():
+        return EMB_ENGINE_EXE
     drive_c = Path(WINE_PREFIX) / "drive_c"
     candidates = [
-        drive_c / "Program Files/Wilcom/EmbroideryStudio_e4.2/BIN/ES.EXE",
-        drive_c / "Program Files/Wilcom/EmbroideryStudio e4.2/BIN/ES.EXE",
-        drive_c / "Program Files/Wilcom/EmbroideryStudio_e4_5/BIN/ES.EXE",
-        drive_c / "Program Files/Wilcom/TrueSizer/TrueSizer.exe",
-        drive_c / "Program Files/Wilcom/TrueSizer e3.0/TrueSizer.exe",
+        drive_c / "Program Files/EmbEngine/EmbroideryStudio_e4.2/BIN/ES.EXE",
+        drive_c / "Program Files/EmbEngine/EmbroideryStudio e4.2/BIN/ES.EXE",
+        drive_c / "Program Files/EmbEngine/EmbroideryStudio_e4_5/BIN/ES.EXE",
+        drive_c / "Program Files/EmbEngine/TrueSizer/TrueSizer.exe",
+        drive_c / "Program Files/EmbEngine/TrueSizer e3.0/TrueSizer.exe",
     ]
     for c in candidates:
         if c.exists():
@@ -54,7 +54,7 @@ def run_es(args: list[str], timeout: int = 90) -> bool:
         subprocess.run(cmd, timeout=timeout, capture_output=True, env=wine_env())
         return True
     except Exception as e:
-        print(f"[Wilcom] ES error: {e}")
+        print(f"[EmbEngine] ES error: {e}")
         return False
 
 @app.get("/health")
@@ -69,7 +69,7 @@ def preview():
         return jsonify({"error": "file not found"}), 404
 
     if not ES_EXE:
-        return jsonify({"error": "Wilcom engine not installed"}), 503
+        return jsonify({"error": "EmbEngine engine not installed"}), 503
 
     with tempfile.TemporaryDirectory() as tmp:
         out_png = Path(tmp) / "preview.png"

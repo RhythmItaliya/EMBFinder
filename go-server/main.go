@@ -44,8 +44,8 @@ func main() {
 	// ── Auto-start Python embedder (MobileCLIP-B) ──────────────────────────────
 	go autoStartEmbedder()
 
-	// ── Validate Wilcom Automation Engine ──────────────────────────────────────
-	go checkWilcom()
+	// ── Validate EmbEngine Automation Engine ──────────────────────────────────────
+	go checkEmbEngine()
 
 	// ── Local CLIP ONNX (Disabled) ─────────────────────────────
 	// We use the Python embedder (ViT-L/14, 768-dim) exclusively for maximum accuracy.
@@ -197,19 +197,19 @@ func findPython() string {
 	return ""
 }
 
-// checkWilcom pings the Wilcom service to ensure it's responsive.
-func checkWilcom() {
+// checkEmbEngine pings the EmbEngine service to ensure it's responsive.
+func checkEmbEngine() {
 	time.Sleep(5 * time.Second) // Give it a moment to boot if running locally
 
 	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(wilcomSvcURL() + "/health")
+	resp, err := client.Get(embEngineSvcURL() + "/health")
 	if err != nil || resp.StatusCode != 200 {
-		log.Printf("\033[33mWARNING: Wilcom Automation Server is offline or unreachable at %s\033[0m", wilcomSvcURL())
-		log.Printf("\033[33m-> Reading .EMB files will be skipped. Ensure the wilcom server is running if needed.\033[0m")
+		log.Printf("\033[33mWARNING: EmbEngine Automation Server is offline or unreachable at %s\033[0m", embEngineSvcURL())
+		log.Printf("\033[33m-> Reading .EMB files will be skipped. Ensure the emb-engine server is running if needed.\033[0m")
 		return
 	}
 	if resp != nil {
 		resp.Body.Close()
 	}
-	log.Printf("\033[32mSUCCESS: Wilcom Automation Server is connected and ready!\033[0m")
+	log.Printf("\033[32mSUCCESS: EmbEngine Automation Server is connected and ready!\033[0m")
 }

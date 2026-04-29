@@ -1,7 +1,7 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV WINEPREFIX=/root/.wine-wilcom
+ENV WINEPREFIX=/root/.wine-emb-engine
 ENV WINEARCH=win64
 ENV DISPLAY=:99
 
@@ -20,9 +20,9 @@ RUN Xvfb :99 -screen 0 1024x768x24 & sleep 2 \
     && DISPLAY=:99 winetricks -q vcrun2019 vcrun2015 \
     && wineserver -k || true
 
-# Install Wilcom ES e4.2
+# Install EmbEngine ES e4.2
 # ── HOW TO ENABLE ────────────────────────────────────────────────────────────
-# 1. Place your Wilcom ES e4.2 installer in this folder (wilcom/)
+# 1. Place your EmbEngine ES e4.2 installer in this folder (emb-engine/)
 # 2. Set build arg: docker compose build --build-arg ES_INSTALLER=setup.exe
 # 3. Rebuild
 ARG ES_INSTALLER=
@@ -30,14 +30,14 @@ ARG SKIP_ES=1
 
 COPY . /tmp/ctx/
 RUN if [ "$SKIP_ES" != "1" ] && [ -n "$ES_INSTALLER" ] && [ -f "/tmp/ctx/$ES_INSTALLER" ]; then \
-        echo "[Wilcom] Installing ES e4.2..." \
+        echo "[EmbEngine] Installing ES e4.2..." \
         && Xvfb :99 -screen 0 1024x768x24 & sleep 3 \
         && DISPLAY=:99 wine "/tmp/ctx/$ES_INSTALLER" /S \
         && sleep 30 \
         && wineserver -k || true \
-        && echo "[Wilcom] ES installed."; \
+        && echo "[EmbEngine] ES installed."; \
     else \
-        echo "[Wilcom] No installer — service will report unavailable."; \
+        echo "[EmbEngine] No installer — service will report unavailable."; \
     fi \
     && rm -rf /tmp/ctx
 
