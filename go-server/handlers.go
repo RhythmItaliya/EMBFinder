@@ -44,13 +44,13 @@ func hStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 	}
 	writeJSON(w, map[string]interface{}{
-		"status":         "ok",
-		"total_indexed":  globalIndex.Count(),
-		"embedder_ready": embedOK,
-		"clip_local":     clipReady,
-		"emb-engine_ready":   embEngineOK,
-		"indexing":       idxState.Running,
-		"auto_paths":     autoLibPaths(),
+		"status":           "ok",
+		"total_indexed":    globalIndex.Count(),
+		"embedder_ready":   embedOK,
+		"clip_local":       clipReady,
+		"emb-engine_ready": embEngineOK,
+		"indexing":         idxState.Running,
+		"auto_paths":       autoLibPaths(),
 	})
 }
 

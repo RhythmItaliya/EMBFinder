@@ -22,7 +22,7 @@ Endpoints:
   POST /convert   — file_path + target_ext → converted file path
   GET  /health    — liveness check
 """
-import os, sys, subprocess, tempfile, base64
+import os, subprocess, tempfile, base64
 from pathlib import Path
 from flask import Flask, request, jsonify
 

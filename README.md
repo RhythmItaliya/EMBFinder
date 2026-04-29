@@ -67,5 +67,5 @@ If you need advanced control over the application (such as running it on a speci
 
 ---
 
-### ⚠️ Disclaimer & Third-Party Engines
+### ⚠️ Disclaimer & Third Party Engines
 **Use at your own risk.** This software is capable of interfacing with native third-party embroidery digitizing engines (e.g., via the `EMB_ENGINE_URL` automation hook) to extract `.emb` thumbnails and geometries. We do not distribute, endorse, or provide licenses for any third-party proprietary software. It is your strict responsibility to ensure you have obtained legal licenses for any third-party engines you connect to this tool.

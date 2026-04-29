@@ -85,7 +85,7 @@ def load_clip() -> None:
             _embed_dim = int(dim)
 
             print(
-                f"[Embedder] ✓ {_model_name}  dim={_embed_dim}  ({time.time()-t0:.1f}s)"
+                f"[Embedder] ✓ {_model_name}  dim={_embed_dim}  ({time.time() - t0:.1f}s)"
             )
             return
 
