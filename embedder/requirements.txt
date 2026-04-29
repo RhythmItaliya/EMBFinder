@@ -1,0 +1,10 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+open-clip-torch>=2.24.0
+torch>=2.2.0
+torchvision>=0.17.0
+Pillow>=10.0
+numpy>=1.24
+pystitch>=1.0
+svgelements>=1.9
