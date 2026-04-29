@@ -1,5 +1,5 @@
 'use strict';
-// EMBFind — app.js
+// EMBFinder — app.js
 // Zero external dependencies. Reads/writes only class names from style.css.
 
 // ── Helpers ───────────────────────────────────────────────────

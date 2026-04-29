@@ -24,7 +24,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 
-app = FastAPI(title="EMBFind Embedder — MobileCLIP-B")
+app = FastAPI(title="EMBFinder Embedder — MobileCLIP-B")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Model selection  (env override: CLIP_MODEL / CLIP_PRETRAINED)

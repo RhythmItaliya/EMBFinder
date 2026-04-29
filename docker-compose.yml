@@ -1,20 +1,20 @@
 version: "3.9"
 # ─────────────────────────────────────────────────────────────────────────────
-# EMBFind — docker compose up --build
+# EMBFinder — docker compose up --build
 # Edit .env to set your embroidery folder path.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  embfind:
+  embfinder:
     build: ./go-server
-    image: embfind:latest
-    container_name: embfind
+    image: embfinder:latest
+    container_name: embfinder
     restart: unless-stopped
     ports:
       - "8765:8765"
     volumes:
-      - embfind_data:/data
+      - embfinder_data:/data
       - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
     environment:
       EMBEDDER_URL: http://embedder:8766
@@ -30,8 +30,8 @@ services:
 
   embedder:
     build: ./embedder
-    image: embfind-embedder:latest
-    container_name: embfind-embedder
+    image: embfinder-embedder:latest
+    container_name: embfinder-embedder
     restart: unless-stopped
     volumes:
       - clip_cache:/root/.cache
@@ -49,8 +49,8 @@ services:
       args:
         ES_INSTALLER: ""
         SKIP_ES: "1"
-    image: embfind-wilcom:latest
-    container_name: embfind-wilcom
+    image: embfinder-wilcom:latest
+    container_name: embfinder-wilcom
     restart: unless-stopped
     volumes:
       - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
@@ -61,5 +61,5 @@ services:
       - wilcom
 
 volumes:
-  embfind_data:
+  embfinder_data:
   clip_cache:

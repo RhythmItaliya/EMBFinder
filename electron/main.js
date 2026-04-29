@@ -1,5 +1,5 @@
 /**
- * EMBFind Electron wrapper
+ * EMBFinder Electron wrapper
  * Starts the Go backend server then opens a native window.
  * Build: cd electron && npm install && npm run build-linux  (or build-win/build-mac)
  */
@@ -18,10 +18,10 @@ let win = null;
 function backendBin() {
   // When packaged, binary is alongside electron app
   const candidates = [
-    path.join(process.resourcesPath || '', 'embfind'),
-    path.join(process.resourcesPath || '', 'embfind.exe'),
-    path.join(__dirname, '..', 'go-server', 'embfind'),
-    path.join(__dirname, '..', 'go-server', 'embfind.exe'),
+    path.join(process.resourcesPath || '', 'embfinder'),
+    path.join(process.resourcesPath || '', 'embfinder.exe'),
+    path.join(__dirname, '..', 'go-server', 'embfinder'),
+    path.join(__dirname, '..', 'go-server', 'embfinder.exe'),
   ];
   for (const c of candidates) {
     try { require('fs').accessSync(c); return c; } catch {}
@@ -37,7 +37,7 @@ function startBackend() {
     return;
   }
   backendProc = spawn(bin, [], {
-    env: { ...process.env, PORT: String(PORT), DB_PATH: path.join(app.getPath('userData'), 'embfind.db') },
+    env: { ...process.env, PORT: String(PORT), DB_PATH: path.join(app.getPath('userData'), 'embfinder.db') },
     stdio: 'inherit',
   });
   backendProc.on('exit', code => console.log('[Backend] exited', code));
@@ -62,7 +62,7 @@ function createWindow() {
     height: 760,
     minWidth: 780,
     minHeight: 520,
-    title: 'EMBFind',
+    title: 'EMBFinder',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

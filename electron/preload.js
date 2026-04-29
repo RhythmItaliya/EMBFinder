@@ -2,7 +2,7 @@
 const { contextBridge } = require('electron');
 const process = require('process');
 
-contextBridge.exposeInMainWorld('embfind', {
+contextBridge.exposeInMainWorld('embfinder', {
   platform: process.platform,
   arch: process.arch,
   version: '1.0.0',

@@ -54,7 +54,7 @@ func clipModelPath() string {
 	cacheDir := os.Getenv("CLIP_CACHE_DIR")
 	if cacheDir == "" {
 		home, _ := os.UserHomeDir()
-		cacheDir = filepath.Join(home, ".embfind", "models")
+		cacheDir = filepath.Join(home, ".embfinder", "models")
 	}
 	return filepath.Join(cacheDir, "clip_vit_b32_vision.onnx")
 }

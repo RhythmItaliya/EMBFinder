@@ -21,7 +21,7 @@ func main() {
 
 	fmt.Println(`
 ╔══════════════════════════════════════╗
-║  EMBFind — Embroidery Visual Search  ║
+║  EMBFinder — Embroidery Visual Search  ║
 ╚══════════════════════════════════════╝`)
 
 	// ── Database ────────────────────────────────────────────────────────────────

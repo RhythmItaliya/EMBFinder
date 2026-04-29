@@ -31,7 +31,7 @@ func initConfig() {
 		Port:         "8765",
 		EmbedderHost: "127.0.0.1",
 		EmbedderPort: "8766",
-		DBPath:       filepath.Join(home, ".embfind", "embfind.db"),
+		DBPath:       filepath.Join(home, ".embfinder", "embfinder.db"),
 		MaxWorkers:   runtime.NumCPU(),
 	}
 
