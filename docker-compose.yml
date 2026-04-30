@@ -23,7 +23,7 @@ services:
       embedder:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8765/api/status || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8765/api/status || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 3
@@ -37,7 +37,7 @@ services:
       - clip_cache:/root/.cache
       - ${EMB_LIB:-/path/to/your/embroidery}:/mnt/lib:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8766/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8766/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5

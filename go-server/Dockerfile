@@ -8,9 +8,9 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /embfinder .
 
 # ── Run ───────────────────────────────────────────────────────────────────────
-FROM scratch
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates curl
 COPY --from=build /embfinder /embfinder
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 EXPOSE 8765
 ENV DB_PATH=/data/embfinder.db
 ENTRYPOINT ["/embfinder"]

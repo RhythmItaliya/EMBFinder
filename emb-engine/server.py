@@ -25,6 +25,11 @@ Endpoints:
 import os, subprocess, tempfile, base64
 from pathlib import Path
 from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+# Load root .env file so the whole project uses the exact same configuration
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 app = Flask(__name__)
 
@@ -36,23 +41,36 @@ EMB_ENGINE_DIR  = os.environ.get("EMB_ENGINE_DIR", "EmbEngine")
 
 def find_es_exe() -> str:
     if EMB_ENGINE_EXE and Path(EMB_ENGINE_EXE).exists():
+        print(f"[EmbEngine] Using configured path: {EMB_ENGINE_EXE}")
         return EMB_ENGINE_EXE
-    drive_c = Path(WINE_PREFIX) / "drive_c"
     
-    # Generic searches for automation binaries
+    # Common locations on Linux (Wine) and mounted drives
     candidates = [
-        drive_c / f"Program Files/{EMB_ENGINE_DIR}/BIN/ES.EXE",
-        drive_c / f"Program Files (x86)/{EMB_ENGINE_DIR}/BIN/ES.EXE",
-        drive_c / f"Program Files/{EMB_ENGINE_DIR}/TrueSizer.exe",
+        Path(WINE_PREFIX) / "drive_c/Program Files/EmbEngine/BIN/ES.EXE",
+        Path(WINE_PREFIX) / "drive_c/Program Files (x86)/EmbEngine/BIN/ES.EXE",
+        Path(WINE_PREFIX) / "drive_c/EmbEngine/BIN/ES.EXE",
+        Path("/media/rhythm/Dharaa/Program Files/EmbEngine/BIN/ES.EXE"),
+        Path("/media/rhythm/Millie/Program Files/EmbEngine/BIN/ES.EXE"),
+        Path.home() / "EmbEngine/BIN/ES.EXE",
     ]
+    
     for c in candidates:
         if c.exists():
+            print(f"[EmbEngine] Found engine at: {c}")
             return str(c)
-    # Recursive search
-    for name in ("ES.EXE", "TrueSizer.exe"):
-        for root, _, files in os.walk(str(drive_c)):
-            if name.lower() in [f.lower() for f in files]:
-                return os.path.join(root, name)
+
+    # Recursive search in Wine prefix as last resort
+    drive_c = Path(WINE_PREFIX) / "drive_c"
+    if drive_c.exists():
+        print(f"[EmbEngine] Searching drive_c recursively...")
+        for name in ("ES.EXE", "TrueSizer.exe"):
+            for root, _, files in os.walk(str(drive_c)):
+                if name.lower() in [f.lower() for f in files]:
+                    p = os.path.join(root, name)
+                    print(f"[EmbEngine] Found engine (recursive): {p}")
+                    return p
+    
+    print("[EmbEngine] ✗ ES.EXE not found in any common locations.")
     return ""
 
 ES_EXE = find_es_exe()
@@ -87,7 +105,10 @@ def preview():
         return jsonify({"error": "file not found"}), 404
 
     if not ES_EXE:
-        return jsonify({"error": "EmbEngine engine not installed"}), 503
+        return jsonify({
+            "error": "Wilcom Engine (ES.EXE) not found.",
+            "suggestion": "Please install Wilcom or set EMB_ENGINE_EXEC_PATH in .env"
+        }), 503
 
     with tempfile.TemporaryDirectory() as tmp:
         out_png = Path(tmp) / "preview.png"

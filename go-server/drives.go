@@ -43,14 +43,21 @@ func linuxDrives() []DriveEntry {
 	var entries []DriveEntry
 	seen := map[string]bool{}
 
-	// 1. Home directory is priority
+	// 1. Priority: Test Data Folder
+	testPath := "/home/rhythm/Documents/test_data"
+	if _, err := os.Stat(testPath); err == nil {
+		entries = append(entries, DriveEntry{Path: testPath, Label: "🧪 Test Data Folder"})
+		seen[testPath] = true
+	}
+
+	// 2. Home directory
 	home, _ := os.UserHomeDir()
-	if home != "" {
+	if home != "" && !seen[home] {
 		entries = append(entries, DriveEntry{Path: home, Label: "Home (" + home + ")"})
 		seen[home] = true
 	}
 
-	// 2. Scan /proc/mounts for ACTIVE mounts
+	// 3. Scan /proc/mounts for ACTIVE mounts
 	f, err := os.Open("/proc/mounts")
 	if err == nil {
 		defer f.Close()
@@ -65,7 +72,6 @@ func linuxDrives() []DriveEntry {
 			if skipFS[fsType] || seen[mountPt] {
 				continue
 			}
-			// Skip system paths but allow /media, /mnt, /run/media
 			isSystem := false
 			for _, pfx := range []string{"/sys", "/proc", "/dev", "/run/lock", "/snap", "/boot"} {
 				if strings.HasPrefix(mountPt, pfx) {
@@ -82,10 +88,10 @@ func linuxDrives() []DriveEntry {
 		}
 	}
 
-	// 3. Proactive Scan for common mount points /media/USER/*
+	// 4. Proactive Scan for common mount points /media/USER/*
 	user := os.Getenv("USER")
 	if user == "" {
-		user = "rhythm" // Fallback based on terminal
+		user = "rhythm"
 	}
 	commonBases := []string{"/media/" + user, "/run/media/" + user, "/mnt"}
 	for _, base := range commonBases {
@@ -144,7 +150,37 @@ func driveLabel(path string) string {
 	}
 	if strings.HasPrefix(path, "/media/") || strings.HasPrefix(path, "/mnt/") ||
 		strings.HasPrefix(path, "/run/media/") {
-		return "📀 " + filepath.Base(path)
+		return filepath.Base(path)
 	}
 	return path
+}
+
+// skipIndexFS are filesystem types that contain no real user files.
+// We never want to walk these during indexing.
+var skipIndexFS = map[string]bool{
+	"nsfs": true, "fuse.portal": true, "fuse.gvfsd-fuse": true,
+	"fuse.snapfuse": true, "squashfs": true, "iso9660": true,
+	"tmpfs": true, "devtmpfs": true, "sysfs": true, "proc": true,
+}
+
+// skipIndexPrefix lists mount-point prefixes that are always virtual/system.
+var skipIndexPrefixes = []string{
+	"/run/snapd", "/run/user", "/snap", "/proc", "/sys", "/dev",
+}
+
+// usableDrive returns true if the drive is real storage worth indexing.
+// Filters out virtual filesystems, snap mounts, and fuse portals.
+func usableDrive(d DriveEntry) bool {
+	if d.Path == "/" {
+		return false // root scan is too expensive
+	}
+	if skipIndexFS[d.FSType] {
+		return false
+	}
+	for _, pfx := range skipIndexPrefixes {
+		if strings.HasPrefix(d.Path, pfx) {
+			return false
+		}
+	}
+	return true
 }

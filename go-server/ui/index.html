@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data:; connect-src 'self' http://127.0.0.1:8765 http://localhost:8765;">
   <title>EMBFinder — Local Visual Search</title>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,35 +12,43 @@
 <body>
 
 <div class="app">
-  <!-- ── Header ────────────────────────────────────────────────── -->
+  <!-- Header -->
   <header class="header">
-    <div class="header__logo">@EMBFind<em>er</em></div>
-    <div class="dot" id="dot"></div>
-    <span class="status-txt" id="statusTxt">Connecting...</span>
+    <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+      <div class="header__logo">@EMBFind<em>er</em></div>
+      <div class="dot" id="dot"></div>
+      <span class="status-txt" id="statusTxt">Connecting...</span>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn--outline btn--sm" id="refreshBtn">Refresh</button>
+      <button class="btn btn--outline btn--sm" id="syncToggleBtn"><span id="syncToggleText">Stop Sync</span></button>
+      <button class="btn btn--danger btn--sm" id="clearBtn">Clear Data</button>
+    </div>
   </header>
 
-  <!-- ── Sidebar ────────────────────────────────────────────────── -->
+  <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar__scroll-area">
       <section>
-        <div class="section-label">Your Drives & Volumes</div>
+        <div class="section-label">Your Drives &amp; Volumes</div>
+        <div class="section-label-sub">Check drives to scan</div>
         <div class="drive-list" id="driveList">
-          <div class="color-muted" style="font-size:12px">Detecting drives…</div>
+          <div class="txt-sm txt-muted">Detecting drives…</div>
         </div>
       </section>
 
       <section>
-        <div class="section-label">Supported Formats</div>
-        <div class="tag-wrap" id="fmtWrap">
-          <div class="color-muted" style="font-size:12px">Loading…</div>
+        <div class="section-label">Target Format</div>
+        <div class="tag-wrap">
+          <span class="tag" style="border-color: var(--c-accent); color: var(--c-accent);"><b>.EMB</b> (Wilcom)</span>
         </div>
       </section>
 
-      <div id="progressWrap" style="display:none">
+      <div id="progressWrap" class="hidden">
         <div class="progress">
           <div class="progress__meta">
             <span id="progLabel">Auto-Updating…</span>
-            <span id="progCount" style="font-family:var(--mono)">0 / 0</span>
+            <span id="progCount" class="txt-mono">0 / 0</span>
           </div>
           <div class="progress__track">
             <div class="progress__fill" id="progFill"></div>
@@ -51,64 +58,48 @@
 
       <section>
         <div class="section-label">Library Stats</div>
-        <div id="formatCounts" class="tag-wrap" style="padding:5px 0">
-          <span style="font-size:12px;color:var(--c-muted)">Waiting for Sync...</span>
+        <div id="formatCounts" class="tag-wrap stats-wrap">
+          <span class="txt-sm txt-muted">Waiting for Sync...</span>
         </div>
       </section>
 
       <div class="divider"></div>
-
-      <button class="btn btn--outline btn--full" id="syncToggleBtn" style="margin-bottom:8px">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M10 9v6m4-6v6m7-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
-        <span id="syncToggleText">Stop Sync</span>
-      </button>
-
-      <button class="btn btn--danger btn--full" id="clearBtn">
-        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3.5h10"/><path d="M4.5 3.5V2.5h5v1"/><path d="M3 3.5l.8 8.5h6.4L11 3.5"/></svg>
-        Clear All Indexed Data
-      </button>
     </div>
   </aside>
 
-  <!-- ── Main ────────────────────────────────────────────────── -->
+  <!-- Main -->
   <main class="main">
     <div class="search-bar">
       <div class="drop-zone" id="dropZone">
         <input type="file" id="fileInput" accept="image/*" hidden>
         <div class="dz-empty" id="dzEmpty">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--c-border)" stroke-width="1.5" style="margin-bottom:8px">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-          </svg>
-          <div style="font-size:16px;font-weight:600">Upload or Drag & Drop an Image</div>
-          <div style="font-size:13px;color:var(--c-muted)">JPG · PNG · WEBP — finds matching embroidery designs</div>
+          <div class="dz-title">Upload or Drag &amp; Drop an Image</div>
+          <div class="dz-sub">JPG · PNG · WEBP — finds matching embroidery designs</div>
         </div>
         <div class="dz-preview" id="dzPreview">
-          <img id="previewThumb" class="dz-preview__thumb">
+          <img id="previewThumb" class="dz-preview__thumb" src="" alt="preview">
           <div>
-            <div id="previewName" style="font-weight:700;font-size:14px">image.jpg</div>
-            <div style="font-size:12px;color:var(--c-muted)">Ready to search</div>
+            <div id="previewName" class="preview-name">image.jpg</div>
+            <div class="txt-sm txt-muted">Ready to search</div>
           </div>
         </div>
       </div>
-      
+
       <div class="search-bar__actions">
         <button class="btn btn--primary btn--full" id="searchBtn" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:8px">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-          </svg>
           Search Library
         </button>
       </div>
     </div>
 
     <div class="searching-bar" id="searchingBar">
-      <div class="dot dot--ok" style="width:6px;height:6px"></div>
+      <div class="dot dot--pulse"></div>
       Searching entire library...
     </div>
 
     <div class="results-bar">
       <div id="resultsTitle">Initializing...</div>
-      <div id="searchTime" style="font-family:var(--mono);font-size:11px;color:var(--c-muted)"></div>
+      <div id="searchTime" class="txt-mono txt-11 txt-muted"></div>
     </div>
 
     <div class="grid-wrap">
@@ -117,27 +108,35 @@
   </main>
 </div>
 
+<!-- Modal -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
     <div class="modal__body">
-      <div class="modal__preview">
-        <img id="modalImg" src="">
+      <div class="modal__comparison">
+        <div class="modal__pane">
+          <div class="section-label">Your Search</div>
+          <img id="modalQueryImg" src="" alt="query">
+        </div>
+        <div class="modal__pane">
+          <div class="section-label">Matched Design</div>
+          <img id="modalImg" src="" alt="design">
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        <h2 id="modalTitle" style="font-size:18px;font-weight:800">Design Name</h2>
-        <div style="display:flex;gap:12px;font-size:13px;color:var(--c-muted)">
+      <div class="modal__info">
+        <h2 id="modalTitle" class="modal-title">Design Name</h2>
+        <div class="modal-path">
           <span id="modalPath">/path/to/design</span>
         </div>
       </div>
       <div class="divider"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div class="card" style="padding:12px;cursor:default">
+      <div class="modal-meta-grid">
+        <div class="card card--static">
           <div class="section-label">Format</div>
-          <div id="modalFormat" style="font-weight:700">DST</div>
+          <div id="modalFormat" class="meta-val">DST</div>
         </div>
-        <div class="card" style="padding:12px;cursor:default">
+        <div class="card card--static">
           <div class="section-label">Size</div>
-          <div id="modalSize" style="font-weight:700">45 KB</div>
+          <div id="modalSize" class="meta-val">45 KB</div>
         </div>
       </div>
       <button class="btn btn--primary btn--full" id="openFolderBtn">Open in File Explorer</button>
@@ -145,8 +144,10 @@
   </div>
 </div>
 
-<div id="toast" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--c-text);color:#fff;padding:10px 20px;border-radius:40px;font-size:13px;font-weight:600;z-index:2000;display:none"></div>
+<!-- Toast -->
+<div id="toast" class="toast hidden"></div>
 
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

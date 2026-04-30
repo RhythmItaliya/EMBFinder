@@ -8,10 +8,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // appConfig holds the central application settings structure.
 type appConfig struct {
+	Mode         string
 	Host         string
 	Port         string
 	EmbedderHost string
@@ -24,34 +28,53 @@ var Config appConfig
 
 // initConfig initializes configuration defaults, resolves port conflicts, and tunes GC.
 func initConfig() {
+	// 1. Try to load .env from current or parent directories
+	_ = godotenv.Load(".env")
+	_ = godotenv.Load("../.env")
+
+	// 2. Setup Mode (development by default)
+	mode := strings.ToLower(os.Getenv("MODE"))
+	if mode == "" {
+		mode = "development"
+	}
+
+	// 3. Determine safe Database Path
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" || dbPath == "/data/embfinder.db" { // override old docker path
+		if mode == "production" {
+			configDir, _ := os.UserConfigDir()
+			appDir := filepath.Join(configDir, "EMBFinder")
+			os.MkdirAll(appDir, 0755)
+			dbPath = filepath.Join(appDir, "embfinder.db")
+		} else {
+			os.MkdirAll("data", 0755)
+			dbPath = filepath.Join("data", "embfinder.db")
+		}
+	}
 
 	Config = appConfig{
+		Mode:         mode,
 		Host:         "127.0.0.1",
 		Port:         "8765",
 		EmbedderHost: "127.0.0.1",
 		EmbedderPort: "8766",
-		DBPath:       filepath.Join("data", "embfinder.db"),
+		DBPath:       dbPath,
 		MaxWorkers:   runtime.NumCPU(),
 	}
 
 	if !isPortFree(Config.Host, Config.Port) {
 		Config.Port = getFreePort(Config.Host)
 	}
-	if !isPortFree(Config.EmbedderHost, Config.EmbedderPort) {
-		Config.EmbedderPort = getFreePort(Config.EmbedderHost)
-	}
 
 	if p := os.Getenv("PORT"); p != "" {
 		Config.Port = p
-	}
-	if p := os.Getenv("DB_PATH"); p != "" {
-		Config.DBPath = p
 	}
 	if p := os.Getenv("EMBEDDER_PORT"); p != "" {
 		Config.EmbedderPort = p
 	}
 
 	debug.SetGCPercent(50)
+	log.Printf("Booting in %s mode...", strings.ToUpper(mode))
 }
 
 // EmbedderURL constructs the full Python AI engine HTTP URL.

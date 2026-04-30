@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -28,7 +29,7 @@ import (
 
 const (
 	clipSz  = 224 // CLIP input size
-	clipDim = 512 // CLIP ViT-B/32 output dimensions
+	clipDim = 768 // DeepScan ViT-L-14 output dimensions
 )
 
 // CLIP normalisation constants
@@ -140,9 +141,17 @@ func EmbedImage(img image.Image) ([]float32, error) {
 		return nil, fmt.Errorf("CLIP not ready")
 	}
 
-	// Resize to 224×224 bicubic
+	// 1. Flatten transparency on White background.
+	// CLIP expects consistent backgrounds; transparent PNGs turning black
+	// (default Go behavior) ruins search accuracy for digitized designs.
+	bounds := img.Bounds()
+	canvas := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
+	draw.Draw(canvas, canvas.Bounds(), img, bounds.Min, draw.Over)
+
+	// 2. Resize to 224×224 bicubic
 	dst := image.NewRGBA(image.Rect(0, 0, clipSz, clipSz))
-	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	draw.BiLinear.Scale(dst, dst.Bounds(), canvas, canvas.Bounds(), draw.Src, nil)
 
 	// Normalize → [1, 3, H, W] CHW layout
 	pixels := make([]float32, 3*clipSz*clipSz)
