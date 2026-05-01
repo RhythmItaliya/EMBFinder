@@ -41,9 +41,12 @@ func initDB(path string) error {
 		size_kb     REAL DEFAULT 0,
 		file_mtime  INTEGER DEFAULT 0,
 		preview_png BLOB,
+		thumbnail   BLOB,
 		embedding   BLOB NOT NULL,
 		indexed_at  INTEGER DEFAULT (strftime('%s','now'))
 	)`)
+
+	db.Exec("ALTER TABLE designs ADD COLUMN thumbnail BLOB")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_path ON designs(file_path)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_mtime ON designs(file_path, file_mtime, size_kb)")
 	return err
@@ -65,14 +68,24 @@ func bf32(b []byte) []float32 {
 	return v
 }
 
+// dbUpsert stores an entry with its render preview and embedding vector.
+// For backward compatibility; new code should use dbUpsertFull.
 func dbUpsert(e Entry, png []byte, emb []float32) error {
+	return dbUpsertFull(e, png, nil, emb)
+}
+
+// dbUpsertFull stores an entry with separate preview (EMB render) and thumbnail (sidecar photo).
+// preview = the computer-generated EMB render PNG  → used as the card image in search results
+// thumb   = sidecar garment photo                  → shown in modal, may be nil
+// emb     = CLIP embedding of the preview          → used for cosine similarity search
+func dbUpsertFull(e Entry, preview, thumb []byte, emb []float32) error {
 	writeMu.Lock()
 	defer writeMu.Unlock()
 	_, err := db.Exec(
 		`INSERT OR REPLACE INTO designs
-		 (id,file_path,file_name,format,size_kb,file_mtime,preview_png,embedding)
-		 VALUES(?,?,?,?,?,?,?,?)`,
-		e.ID, e.FilePath, e.FileName, e.Format, e.SizeKB, e.FileMTime, png, f32b(emb),
+		 (id,file_path,file_name,format,size_kb,file_mtime,preview_png,thumbnail,embedding)
+		 VALUES(?,?,?,?,?,?,?,?,?)`,
+		e.ID, e.FilePath, e.FileName, e.Format, e.SizeKB, e.FileMTime, preview, thumb, f32b(emb),
 	)
 	return err
 }
@@ -112,6 +125,13 @@ func dbPreview(id string) ([]byte, error) {
 	var png []byte
 	err := db.QueryRow("SELECT preview_png FROM designs WHERE id=?", id).Scan(&png)
 	return png, err
+}
+
+func dbThumbnail(id string) ([]byte, error) {
+	var thumb []byte
+	// Returns thumbnail (garment photo) if stored, otherwise falls back to preview_png
+	err := db.QueryRow("SELECT COALESCE(thumbnail, preview_png) FROM designs WHERE id=?", id).Scan(&thumb)
+	return thumb, err
 }
 
 func dbGetPath(id string) (string, error) {

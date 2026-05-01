@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"container/heap"
-	"math"
 	"runtime"
 	"slices"
 	"strings"
@@ -225,24 +224,7 @@ func (idx *Index) Search(query []float32, k int, formatFilter string) []SearchRe
 
 // rescaleScore maps raw CLIP cosine similarity to a honest 0-100% scale.
 func rescaleScore(s float64) float64 {
-	// Clip to sensible range
-	if s < 0.15 {
-		return math.Round(s*100) / 100
-	}
-
-	// Linear-ish mapping: 
-	// 0.20 -> ~20%
-	// 0.30 -> ~45%
-	// 0.45 -> ~80%
-	// 0.60 -> ~95%
-	// 0.75+ -> 100%
-	res := (s - 0.15) / (0.60 - 0.15)
-	if res < 0 { res = 0 }
-	if res > 1 { res = 1 }
-	
-	// Blend with raw score to prevent "Score Inflation"
-	final := (res * 0.7) + (s * 0.3)
-	return math.Round(final*10000) / 10000
+	return s
 }
 
 // Count returns the number of entries currently in the in-memory index.

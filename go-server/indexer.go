@@ -19,23 +19,20 @@ import (
 )
 
 // ── Supported formats ─────────────────────────────────────────────────────────
-// Both embroidery AND image formats — CLIP handles all of them.
+// ONLY .emb files are indexed. Photos/images are NEVER indexed.
+// Uploaded images are used as search queries only — never stored in the index.
 
 var embroideryExts = map[string]bool{
 	".emb": true,
 }
 
-// imageExts — helper for search query validation
-var imageExts = map[string]bool{
-	".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
-}
-
+// isSupportedExt returns true ONLY for .emb files.
 func isSupportedExt(ext string) bool {
-	return isEmbExt(ext) || isImageExt(ext)
+	return strings.EqualFold(ext, ".emb")
 }
 
-func isImageExt(ext string) bool { return imageExts[strings.ToLower(ext)] }
-func isEmbExt(ext string) bool   { return embroideryExts[strings.ToLower(ext)] }
+func isEmbExt(ext string) bool { return strings.EqualFold(ext, ".emb") }
+
 
 // ── Services ──────────────────────────────────────────────────────────────────
 // Python Embedder URL is now provided by Config.EmbedderURL()
@@ -220,14 +217,13 @@ type embedResp struct {
 	PreviewB64 string    `json:"preview_b64"`
 }
 
-// callEmbedFile orchestrates the preview rendering and AI embedding for a given file path.
-// It automatically routes image files directly to the AI engine via raw bytes to avoid IPC path issues,
-// and routes embroidery files through the pystitch renderer before embedding.
+// callEmbedFile embeds any image file path (used during search only, not indexing).
 func callEmbedFile(path string) (*embedResp, error) {
 	ext := strings.ToLower(filepath.Ext(path))
+	isImg := ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
 
-	// ── Path 1: local ONNX CLIP (image or any file with preview) ─────────────
-	if clipReady && isImageExt(ext) {
+	// ── Path 1: local ONNX CLIP ───────────────────────────────────────────────
+	if clipReady && isImg {
 		imgBytes, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -240,9 +236,8 @@ func callEmbedFile(path string) (*embedResp, error) {
 		return &embedResp{Embedding: vec, PreviewB64: previewB64}, nil
 	}
 
-	// ── Path 2: image file → Python /embed (multipart POST) ────────
-	// Consistent with callEmbedRaw, handles binary image data.
-	if isImageExt(ext) {
+	// ── Path 2: image → Python /embed ─────────────────────────────────────────
+	if isImg {
 		imgBytes, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -250,7 +245,7 @@ func callEmbedFile(path string) (*embedResp, error) {
 		return callEmbedRaw(imgBytes, ext)
 	}
 
-	// ── Path 3: embroidery → Python /embed-file (pystitch render + embed) ─────
+	// ── Path 3: any file → Python /embed-file ─────────────────────────────────
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("file_path", path)
@@ -268,26 +263,10 @@ func callEmbedFile(path string) (*embedResp, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, err
 	}
-	// If local CLIP is also ready, re-embed the preview locally (consistent dim)
-	if clipReady && r.PreviewB64 != "" {
-		if pngBytes, decErr := base64.StdEncoding.DecodeString(r.PreviewB64); decErr == nil {
-			if vec, embErr := EmbedImageBytes(pngBytes); embErr == nil {
-				r.Embedding = vec
-			}
-		}
-	}
 	return &r, nil
 }
 
 func callEmbedRaw(imgBytes []byte, ext string) (*embedResp, error) {
-	if clipReady {
-		vec, err := EmbedImageBytes(imgBytes)
-		if err == nil {
-			previewB64 := base64.StdEncoding.EncodeToString(resizeForPreview(imgBytes))
-			return &embedResp{Embedding: vec, PreviewB64: previewB64}, nil
-		}
-	}
-
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	part, _ := mw.CreateFormFile("file", "image"+ext)
@@ -514,73 +493,45 @@ func StartIndexing(path string, force bool) {
 					return
 				}
 
-				// ── STEP 3: EMBED (New File) ────────────────────────────────
+				// ── STEP 3: EMBED (New EMB File) ────────────────────────────
 				idxState.mu.Lock()
 				idxState.CurrentFile = filepath.Base(fp)
 				idxState.mu.Unlock()
 
-				var png []byte
-				var result *embedResp
-				var err error
-
-				if strings.ToLower(filepath.Ext(fp)) == ".emb" {
-					log.Printf("[Indexer] Processing EMB: %s", filepath.Base(fp))
-					// 1. Try to find a sidecar image first
-					sidecar := findSidecar(fp)
-					if sidecar != "" {
-						log.Printf("[Indexer]   -> Found sidecar: %s", filepath.Base(sidecar))
-						result, err = callEmbedFile(sidecar)
-					}
-					
-					// 2. If no sidecar, or sidecar failed, render a preview
-					if result == nil {
-						log.Printf("[Indexer]   -> Rendering Wilcom preview...")
-						png = callEmbEnginePreview(fp)
-						if png != nil {
-							result, err = callEmbedRaw(png, ".png")
-						} else {
-							log.Printf("[Indexer]   ! Wilcom render failed for %s", filepath.Base(fp))
-						}
-					}
-					
-					// DO NOT fallback to direct file embed for .EMB as it is binary data, not an image.
-					if result == nil {
-						log.Printf("[Indexer]   ! Skipping %s: no visual preview or sidecar found", filepath.Base(fp))
-					}
-				} else {
-					log.Printf("[Indexer] Processing Image: %s", filepath.Base(fp))
-					result, err = callEmbedFile(fp)
-				}
-
-				if err != nil || result == nil {
-					log.Printf("[Indexer] ✗ Failed to index %s: %v", filepath.Base(fp), err)
+				// Render EMB → PNG via Wilcom engine
+				png := callEmbEnginePreview(fp)
+				if png == nil {
+					log.Printf("[Indexer] ✗ No render for %s — skipping", filepath.Base(fp))
 					atomic.AddInt32(&idxState.Progress, 1)
 					return
 				}
 
-				if png == nil && result.PreviewB64 != "" {
-					png, _ = base64.StdEncoding.DecodeString(result.PreviewB64)
+				// Embed the rendered PNG as the search vector
+				result, embErr := callEmbedRaw(png, ".png")
+				if embErr != nil || result == nil {
+					log.Printf("[Indexer] ✗ Embed failed for %s: %v", filepath.Base(fp), embErr)
+					atomic.AddInt32(&idxState.Progress, 1)
+					return
 				}
 
-				// Clean up any old entries at this path
+				// Store entry: render PNG as preview, embedding from render
 				dbRemoveByPath(fp)
 				globalIndex.RemoveByPrefix(fp)
 
 				e := Entry{
 					ID: id, FilePath: fp, FileName: filepath.Base(fp),
-					Format:     strings.TrimPrefix(strings.ToLower(filepath.Ext(fp)), "."),
-					SizeKB:     float64(size) / 1024, FileMTime: mtime, HasPreview: png != nil,
+					Format: "emb", SizeKB: float64(size) / 1024,
+					FileMTime: mtime, HasPreview: true,
 				}
-				if err := dbUpsert(e, png, result.Embedding); err == nil {
+				if err := dbUpsertFull(e, png, nil, result.Embedding); err == nil {
 					e.Vector = result.Embedding
 					globalIndex.Add(e)
-					log.Printf("[Indexer] ✓ Indexed: %s", filepath.Base(fp))
-					
+					log.Printf("[Indexer] ✓ %s", filepath.Base(fp))
 					if atomic.LoadInt32(&idxState.Progress)%10 == 0 {
 						RefreshIdxStateCounts()
 					}
 				} else {
-					log.Printf("[Indexer] ✗ DB Error for %s: %v", filepath.Base(fp), err)
+					log.Printf("[Indexer] ✗ DB error for %s: %v", filepath.Base(fp), err)
 				}
 				atomic.AddInt32(&idxState.Progress, 1)
 			}()
@@ -588,6 +539,7 @@ func StartIndexing(path string, force bool) {
 		wg.Wait()
 	}()
 }
+
 
 var triggerScan = make(chan struct{}, 1)
 
