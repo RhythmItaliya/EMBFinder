@@ -3,148 +3,264 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EMBFinder — Local Visual Search</title>
+  <title>EMBFinder — Embroidery Visual Search</title>
+  <meta name="description" content="AI-powered local visual search for Wilcom EMB embroidery files.">
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 </head>
 <body>
 
 <div class="app">
-  <!-- Header -->
+  <!-- ── Header ── -->
   <header class="header">
-    <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-      <div class="header__logo">@EMBFind<em>er</em></div>
+    <div class="header__brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="brand-icon">
+        <circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="1.5"/>
+        <path d="M8 12 Q12 6 16 12 Q12 18 8 12Z" fill="#2563eb" opacity=".7"/>
+        <circle cx="12" cy="12" r="2" fill="#2563eb"/>
+      </svg>
+      <span class="header__logo">EMBFind<em>er</em></span>
       <div class="dot" id="dot"></div>
       <span class="status-txt" id="statusTxt">Connecting...</span>
     </div>
-    <div style="display: flex; gap: 8px;">
-      <button class="btn btn--outline btn--sm" id="refreshBtn">Refresh</button>
+    <nav class="tab-nav">
+      <button class="tab-btn tab-btn--active" id="tabSearch" onclick="switchTab('search')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        Visual Search
+      </button>
+      <button class="tab-btn" id="tabLibrary" onclick="switchTab('library')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        EMB Library
+      </button>
+    </nav>
+    <div class="header__actions">
+      <button class="btn btn--outline btn--sm" id="refreshBtn">↻ Refresh</button>
       <button class="btn btn--outline btn--sm" id="syncToggleBtn"><span id="syncToggleText">Stop Sync</span></button>
       <button class="btn btn--danger btn--sm" id="clearBtn">Clear Data</button>
     </div>
   </header>
 
-  <!-- Sidebar -->
+  <!-- ── Sidebar ── -->
   <aside class="sidebar">
     <div class="sidebar__scroll-area">
       <section>
-        <div class="section-label">Your Drives &amp; Volumes</div>
-        <div class="section-label-sub">Check drives to scan</div>
+        <div class="section-label">Drives &amp; Volumes</div>
+        <div class="section-label-sub">Select drives to scan</div>
         <div class="drive-list" id="driveList">
           <div class="txt-sm txt-muted">Detecting drives…</div>
-        </div>
-      </section>
-
-      <section>
-        <div class="section-label">Target Format</div>
-        <div class="tag-wrap">
-          <span class="tag" style="border-color: var(--c-accent); color: var(--c-accent);"><b>.EMB</b> (Wilcom)</span>
         </div>
       </section>
 
       <div id="progressWrap" class="hidden">
         <div class="progress">
           <div class="progress__meta">
-            <span id="progLabel">Auto-Updating…</span>
-            <span id="progCount" class="txt-mono">0 / 0</span>
+            <span id="progLabel">Syncing…</span>
+            <span id="progCount" class="txt-mono">0%</span>
           </div>
-          <div class="progress__track">
-            <div class="progress__fill" id="progFill"></div>
-          </div>
+          <div class="progress__track"><div class="progress__fill" id="progFill"></div></div>
         </div>
       </div>
 
       <section>
         <div class="section-label">Library Stats</div>
-        <div id="formatCounts" class="tag-wrap stats-wrap">
-          <span class="txt-sm txt-muted">Waiting for Sync...</span>
+        <div id="formatCounts" class="stats-wrap">
+          <span class="txt-sm txt-muted">Waiting for sync...</span>
         </div>
       </section>
-
-      <div class="divider"></div>
     </div>
   </aside>
 
-  <!-- Main -->
-  <main class="main">
+  <!-- ══════════ VISUAL SEARCH TAB ══════════ -->
+  <main class="main" id="panelSearch">
     <div class="search-bar">
       <div class="drop-zone" id="dropZone">
-        <input type="file" id="fileInput" accept="image/*" hidden>
+        <input type="file" id="fileInput" accept="image/*,.emb,.EMB" hidden>
         <div class="dz-empty" id="dzEmpty">
-          <div class="dz-title">Upload or Drag &amp; Drop an Image</div>
-          <div class="dz-sub">JPG · PNG · WEBP — finds matching embroidery designs</div>
+          <div class="dz-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <div class="dz-title">Drop an Image or .EMB File Here</div>
+          <div class="dz-sub">JPG · PNG · WEBP · EMB — AI finds visually matching embroidery designs</div>
         </div>
         <div class="dz-preview" id="dzPreview">
           <img id="previewThumb" class="dz-preview__thumb" src="" alt="preview">
-          <div>
+          <div class="dz-preview__info">
             <div id="previewName" class="preview-name">image.jpg</div>
-            <div class="txt-sm txt-muted">Ready to search</div>
+            <div class="txt-sm txt-muted" id="previewType">Ready to search</div>
           </div>
+          <button class="btn-icon" id="clearFileBtn" title="Remove">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
       </div>
-
-      <div class="search-bar__actions">
-        <button class="btn btn--primary btn--full" id="searchBtn" disabled>
-          Search Library
-        </button>
-      </div>
+      <button class="btn btn--primary btn--full" id="searchBtn" disabled>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        Search Library
+      </button>
     </div>
 
+    <!-- searching indicator -->
     <div class="searching-bar" id="searchingBar">
       <div class="dot dot--pulse"></div>
-      Searching entire library...
+      Searching entire library with AI...
     </div>
 
-    <div class="results-bar">
-      <div id="resultsTitle">Initializing...</div>
+    <!-- results header -->
+    <div class="results-bar" id="resultsBar" style="display:none">
+      <div id="resultsTitle"></div>
       <div id="searchTime" class="txt-mono txt-11 txt-muted"></div>
     </div>
 
-    <div class="grid-wrap">
+    <!-- results grid -->
+    <div class="grid-wrap" id="searchGridWrap" style="display:none">
       <div class="grid" id="resultsGrid"></div>
+    </div>
+
+    <!-- empty state when no search yet -->
+    <div class="search-empty-state" id="searchEmptyState">
+      <div class="empty-icon">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      </div>
+      <div class="empty-title">Upload an image to find matching embroidery designs</div>
+      <div class="empty-sub">Supports JPG, PNG, WEBP photos and .EMB files<br>The AI will find visually similar designs from your library</div>
+    </div>
+  </main>
+
+  <!-- ══════════ LIBRARY TAB ══════════ -->
+  <main class="main hidden" id="panelLibrary">
+    <div class="lib-toolbar">
+      <div class="lib-search-wrap">
+        <svg class="lib-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" id="libSearchInput" class="lib-search" placeholder="Filter by name…" autocomplete="off">
+      </div>
+      <span id="libCount" class="txt-sm txt-muted"></span>
+    </div>
+    <div class="grid-wrap">
+      <div class="grid" id="libGrid"></div>
+      <div class="lib-pagination" id="libPagination"></div>
     </div>
   </main>
 </div>
 
-<!-- Modal -->
+<!-- ══════════════ EMB VIEWER MODAL ══════════════ -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
-    <div class="modal__body">
-      <div class="modal__comparison">
-        <div class="modal__pane">
-          <div class="section-label">Your Search</div>
-          <img id="modalQueryImg" src="" alt="query">
-        </div>
-        <div class="modal__pane">
-          <div class="section-label">Matched Design</div>
-          <img id="modalImg" src="" alt="design">
-        </div>
-      </div>
-      <div class="modal__info">
-        <h2 id="modalTitle" class="modal-title">Design Name</h2>
-        <div class="modal-path">
-          <span id="modalPath">/path/to/design</span>
+    <button class="modal__close" onclick="closeModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+
+    <div class="modal__layout">
+
+      <!-- LEFT: Query image (only in search mode) -->
+      <div class="modal__query-pane" id="modalQueryPane">
+        <div class="pane-label">Your Search Image</div>
+        <div class="pane-img-wrap">
+          <img id="modalQueryImg" src="" alt="query image">
         </div>
       </div>
-      <div class="divider"></div>
-      <div class="modal-meta-grid">
-        <div class="card card--static">
-          <div class="section-label">Format</div>
-          <div id="modalFormat" class="meta-val">DST</div>
+
+      <!-- CENTER: EMB Render (Wilcom-style embroidery environment) -->
+      <div class="modal__render-pane">
+        <div class="pane-label">
+          <span id="renderLabel">Embroidery Render</span>
+          <span class="match-badge" id="matchBadge" style="display:none"></span>
         </div>
-        <div class="card card--static">
-          <div class="section-label">Size</div>
-          <div id="modalSize" class="meta-val">45 KB</div>
+        <div class="emb-viewer" id="embViewer">
+          <div class="emb-viewer__bg">
+            <!-- Fabric texture grid -->
+            <div class="emb-viewer__fabric"></div>
+            <img id="modalRender" class="emb-viewer__img" src="" alt="EMB render"
+                 onload="this.classList.add('loaded')"
+                 onerror="document.getElementById('embViewer').classList.add('no-render')">
+            <div class="emb-viewer__no-render">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>No Render Available</span>
+            </div>
+          </div>
+          <!-- Wilcom-style zoom controls -->
+          <div class="emb-viewer__controls">
+            <button class="viewer-btn" onclick="zoomViewer(1.2)" title="Zoom in">+</button>
+            <button class="viewer-btn" onclick="zoomViewer(1)" title="Reset">⊙</button>
+            <button class="viewer-btn" onclick="zoomViewer(0.8)" title="Zoom out">−</button>
+          </div>
         </div>
       </div>
-      <button class="btn btn--primary btn--full" id="openFolderBtn">Open in File Explorer</button>
+
+      <!-- RIGHT: EMB Metadata panel -->
+      <div class="modal__info-pane">
+        <div class="modal__file-header">
+          <div class="modal__file-name" id="modalTitle">Design Name.EMB</div>
+          <div class="modal__file-path" id="modalPath">/path/to/file</div>
+        </div>
+
+        <!-- Stitch statistics -->
+        <div class="stat-section">
+          <div class="stat-section__label">Stitch Details</div>
+          <div class="stat-grid">
+            <div class="stat-item">
+              <div class="stat-item__icon stitch-icon">⬡</div>
+              <div>
+                <div class="stat-item__val" id="metaStitches">—</div>
+                <div class="stat-item__key">Stitches</div>
+              </div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-item__icon trim-icon">✂</div>
+              <div>
+                <div class="stat-item__val" id="metaTrims">—</div>
+                <div class="stat-item__key">Trims</div>
+              </div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-item__icon color-icon">◉</div>
+              <div>
+                <div class="stat-item__val" id="metaColors">—</div>
+                <div class="stat-item__key">Colors</div>
+              </div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-item__icon size-icon">⬜</div>
+              <div>
+                <div class="stat-item__val" id="metaSize">—</div>
+                <div class="stat-item__key">File Size</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Format badge -->
+        <div class="stat-section">
+          <div class="stat-section__label">File Info</div>
+          <div class="format-row">
+            <span class="format-badge" id="modalFormat">EMB</span>
+            <span class="txt-sm txt-muted" id="modalEngineStatus"></span>
+          </div>
+        </div>
+
+        <!-- Loading spinner for metadata -->
+        <div class="meta-loading" id="metaLoading">
+          <div class="spinner"></div>
+          <span>Loading design info...</span>
+        </div>
+
+        <!-- Actions -->
+        <div class="modal-actions">
+          <button class="btn btn--primary btn--full" id="openFolderBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Open in File Explorer
+          </button>
+          <button class="btn btn--outline btn--full" id="useAsQueryBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            Use as Search Query
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- Toast -->
 <div id="toast" class="toast hidden"></div>
 
 <script src="config.js"></script>
