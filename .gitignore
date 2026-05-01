@@ -72,3 +72,4 @@ yarn-error.log*
 
 # Project Specific
 graphify-out/
+scratch/
