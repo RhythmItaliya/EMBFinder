@@ -126,6 +126,12 @@ func hDriveSelect(w http.ResponseWriter, r *http.Request) {
 }
 
 // hIndexStart manually triggers an immediate index scan of selected drives.
+// Algorithm:
+//   1. If no drives are selected → return 400-style JSON error so UI shows toast.
+//   2. If sync is paused → un-pause and wake the AutoIndexAllDrives loop via triggerScan.
+//      This covers the case where the user paused, then manually hits Scan.
+//   3. If already running and not paused → return "already_running" so UI shows a toast.
+//   4. Otherwise → un-pause, send triggerScan wakeup so the loop starts a new sweep now.
 func hIndexStart(w http.ResponseWriter, r *http.Request) {
 	RegisterHeartbeat()
 
@@ -138,16 +144,24 @@ func hIndexStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if idxState.Running {
+	idxState.mu.Lock()
+	running := idxState.Running
+	paused  := idxState.UserPaused
+	idxState.mu.Unlock()
+
+	// Case: actively indexing and not paused → already running
+	if running && !paused {
 		writeJSON(w, map[string]interface{}{"status": "already_running"})
 		return
 	}
 
+	// Un-pause in all cases (paused+running OR paused+idle OR idle)
 	idxState.mu.Lock()
 	idxState.UserPaused = false
+	idxState.Status     = "Starting scan..."
 	idxState.mu.Unlock()
 
-	// Trigger the central AutoIndexAllDrives loop to wake up and scan immediately
+	// Wake the AutoIndexAllDrives loop immediately
 	select {
 	case triggerScan <- struct{}{}:
 	default:

@@ -85,6 +85,14 @@ func (c *appConfig) EmbedderURL() string {
 	return "http://" + c.EmbedderHost + ":" + c.EmbedderPort
 }
 
+// EmbEngineURL constructs the URL for the Embroidery Render Engine.
+func (c *appConfig) EmbEngineURL() string {
+	if u := os.Getenv("EMB_ENGINE_URL"); u != "" {
+		return u
+	}
+	return "http://127.0.0.1:8767"
+}
+
 // MemoryCleanup triggers garbage collection to aggressively return RAM to the OS.
 func MemoryCleanup() {
 	runtime.GC()

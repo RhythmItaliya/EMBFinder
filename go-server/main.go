@@ -79,6 +79,9 @@ func main() {
 	mux.HandleFunc("/api/index/start", hIndexStart)
 	mux.HandleFunc("/api/clear", hClear)
 	mux.HandleFunc("/api/latest", hLatest)
+	mux.HandleFunc("/api/browse", hBrowseEMB)
+	mux.HandleFunc("/api/open-file", hOpenFile)
+	mux.HandleFunc("/api/emb-info", hEmbInfo)
 
 	// Embedded UI
 	uiFS, _ := fs.Sub(uiFiles, "ui")
