@@ -37,6 +37,11 @@ const SyncController = (() => {
     if (_es && _es.readyState !== EventSource.CLOSED) return;
     _es = new EventSource(API.streamUrl());
 
+    _es.onopen = () => {
+      $('dot').className       = 'dot dot--ok';
+      $('statusTxt').textContent = `Online — ${_indexed.toLocaleString()} designs`;
+    };
+
     _es.onmessage = e => {
       const d = JSON.parse(e.data);
       _indexed = d.total_indexed || 0;
