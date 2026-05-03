@@ -25,10 +25,6 @@ project_name: embfinder
 
 # ── Source directory ──────────────────────────────────────────────────────────
 # All Go source is inside go-server/
-before:
-  hooks:
-    - cmd: go mod tidy
-      dir: go-server
 
 # ── Builds ────────────────────────────────────────────────────────────────────
 builds:
