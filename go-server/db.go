@@ -34,19 +34,22 @@ func initDB(path string) error {
 	db.SetConnMaxLifetime(time.Hour)
 	db.Exec("PRAGMA mmap_size=268435456")
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS designs (
-		id          TEXT PRIMARY KEY,
-		file_path   TEXT NOT NULL,
-		file_name   TEXT NOT NULL,
-		format      TEXT NOT NULL,
-		size_kb     REAL DEFAULT 0,
-		file_mtime  INTEGER DEFAULT 0,
-		preview_png BLOB,
-		thumbnail   BLOB,
-		embedding   BLOB NOT NULL,
-		indexed_at  INTEGER DEFAULT (strftime('%s','now'))
+		id                TEXT PRIMARY KEY,
+		file_path         TEXT NOT NULL,
+		file_name         TEXT NOT NULL,
+		format            TEXT NOT NULL,
+		size_kb           REAL DEFAULT 0,
+		file_mtime        INTEGER DEFAULT 0,
+		preview_png       BLOB,
+		thumbnail         BLOB,
+		embedding         BLOB NOT NULL,
+		sidecar_embedding BLOB,
+		indexed_at        INTEGER DEFAULT (strftime('%s','now'))
 	)`)
 
+	// Migrations for existing DBs
 	db.Exec("ALTER TABLE designs ADD COLUMN thumbnail BLOB")
+	db.Exec("ALTER TABLE designs ADD COLUMN sidecar_embedding BLOB")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_path ON designs(file_path)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_mtime ON designs(file_path, file_mtime, size_kb)")
 	return err
@@ -74,18 +77,28 @@ func dbUpsert(e Entry, png []byte, emb []float32) error {
 	return dbUpsertFull(e, png, nil, emb)
 }
 
-// dbUpsertFull stores an entry with separate preview (EMB render) and thumbnail (sidecar photo).
-// preview = the computer-generated EMB render PNG  → used as the card image in search results
-// thumb   = sidecar garment photo                  → shown in modal, may be nil
-// emb     = CLIP embedding of the preview          → used for cosine similarity search
+// dbUpsertFull stores an entry with separate preview (EMB render), thumbnail (sidecar photo),
+// render embedding, and optionally a sidecar-photo embedding.
+// preview          = the computer-generated EMB render PNG  → card image in search results
+// thumb            = sidecar garment photo                  → shown in modal, may be nil
+// emb              = CLIP embedding of the render           → cosine similarity search
+// sidecarEmb       = CLIP embedding of the sidecar photo    → improves accuracy when available
 func dbUpsertFull(e Entry, preview, thumb []byte, emb []float32) error {
+	return dbUpsertDual(e, preview, thumb, emb, nil)
+}
+
+func dbUpsertDual(e Entry, preview, thumb []byte, emb, sidecarEmb []float32) error {
 	writeMu.Lock()
 	defer writeMu.Unlock()
+	var sidecarBlob []byte
+	if len(sidecarEmb) > 0 {
+		sidecarBlob = f32b(sidecarEmb)
+	}
 	_, err := db.Exec(
 		`INSERT OR REPLACE INTO designs
-		 (id,file_path,file_name,format,size_kb,file_mtime,preview_png,thumbnail,embedding)
-		 VALUES(?,?,?,?,?,?,?,?,?)`,
-		e.ID, e.FilePath, e.FileName, e.Format, e.SizeKB, e.FileMTime, preview, thumb, f32b(emb),
+		 (id,file_path,file_name,format,size_kb,file_mtime,preview_png,thumbnail,embedding,sidecar_embedding)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		e.ID, e.FilePath, e.FileName, e.Format, e.SizeKB, e.FileMTime, preview, thumb, f32b(emb), sidecarBlob,
 	)
 	return err
 }
@@ -104,12 +117,16 @@ func dbCheckCache(path string, mtime int64, size int64) (string, bool) {
 func dbGetByHash(id string) (Entry, bool) {
 	var e Entry
 	var raw []byte
+	var sidecarRaw []byte
 	err := db.QueryRow(
-		`SELECT id, file_path, file_name, format, size_kb, file_mtime, (preview_png IS NOT NULL), embedding 
+		`SELECT id, file_path, file_name, format, size_kb, file_mtime, (preview_png IS NOT NULL), embedding, sidecar_embedding
 		 FROM designs WHERE id=?`, id,
-	).Scan(&e.ID, &e.FilePath, &e.FileName, &e.Format, &e.SizeKB, &e.FileMTime, &e.HasPreview, &raw)
+	).Scan(&e.ID, &e.FilePath, &e.FileName, &e.Format, &e.SizeKB, &e.FileMTime, &e.HasPreview, &raw, &sidecarRaw)
 	if err == nil {
 		e.Vector = bf32(raw)
+		if len(sidecarRaw) > 0 {
+			e.SidecarVector = bf32(sidecarRaw)
+		}
 		return e, true
 	}
 	return e, false
@@ -143,7 +160,7 @@ func dbGetPath(id string) (string, error) {
 func dbLoadAll() ([]Entry, error) {
 	rows, err := db.Query(
 		`SELECT id,file_path,file_name,format,size_kb,file_mtime,
-		        (preview_png IS NOT NULL),embedding FROM designs`)
+		        (preview_png IS NOT NULL),embedding,sidecar_embedding FROM designs`)
 	if err != nil {
 		return nil, err
 	}
@@ -152,9 +169,13 @@ func dbLoadAll() ([]Entry, error) {
 	for rows.Next() {
 		var e Entry
 		var raw []byte
+		var sidecarRaw []byte
 		rows.Scan(&e.ID, &e.FilePath, &e.FileName, &e.Format,
-			&e.SizeKB, &e.FileMTime, &e.HasPreview, &raw)
+			&e.SizeKB, &e.FileMTime, &e.HasPreview, &raw, &sidecarRaw)
 		e.Vector = bf32(raw)
+		if len(sidecarRaw) > 0 {
+			e.SidecarVector = bf32(sidecarRaw)
+		}
 		out = append(out, e)
 	}
 	return out, nil

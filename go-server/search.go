@@ -111,10 +111,10 @@ func (idx *Index) Add(e Entry) {
 //  5. Total complexity: O(N log K / W + W·K·log(W·K)), typically ~5–10× faster
 //     than a single-threaded scan for large libraries.
 //
-// GPU path: query embedding is already computed by MobileCLIP-B on CUDA before
-// this function is called (see hSearch). The search itself is pure CPU because
-// the in-memory float32 array fits in L3 cache and CUDA kernel launch overhead
-// would dominate for realistic library sizes (< 1M designs).
+// Dual-vector scoring: for each indexed EMB, we compute cosine similarity against
+// BOTH the render embedding (flat icon) and the sidecar photo embedding (garment photo).
+// The score used is the MAXIMUM of the two — this bridges the domain gap between
+// photographic query images and synthetic renders.
 func (idx *Index) Search(query []float32, k int, formatFilter string) []SearchResult {
 	// ── 1. Snapshot under RLock ───────────────────────────────────────────────
 	idx.mu.RLock()
@@ -151,9 +151,9 @@ func (idx *Index) Search(query []float32, k int, formatFilter string) []SearchRe
 	chunk := (n + workers - 1) / workers
 
 	var (
-		wg          sync.WaitGroup
-		resMu       sync.Mutex
-		globalHeap  []scored
+		wg         sync.WaitGroup
+		resMu      sync.Mutex
+		globalHeap []scored
 	)
 
 	// Pre-allocate output slice to avoid repeated lock acquisitions.
@@ -178,7 +178,14 @@ func (idx *Index) Search(query []float32, k int, formatFilter string) []SearchRe
 			heap.Init(&h)
 
 			for i := lo; i < hi; i++ {
+				// Score = max(render_score, sidecar_score)
 				score := dot(query, snap[i].Vector)
+				if len(snap[i].SidecarVector) > 0 {
+					if sc := dot(query, snap[i].SidecarVector); sc > score {
+						score = sc
+					}
+				}
+
 				if h.Len() < k {
 					heap.Push(&h, scored{snap[i], score})
 				} else if score > h[0].s {
