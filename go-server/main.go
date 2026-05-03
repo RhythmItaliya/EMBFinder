@@ -91,7 +91,10 @@ func main() {
 	// connect to the high-performance background server (supporting SSE/Streaming)
 	mux.HandleFunc("/config.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
-		fmt.Fprintf(w, "window.API_BASE = 'http://%s:%s';\n", Config.Host, Config.Port)
+		// API_BASE  → used by api.js to prefix all fetch() calls
+		// APP_MODE  → used by DriveController to hide dev-only paths in production
+		fmt.Fprintf(w, "window.API_BASE  = 'http://%s:%s';\n", Config.Host, Config.Port)
+		fmt.Fprintf(w, "window.APP_MODE  = '%s';\n", Config.Mode)
 	})
 
 	mux.Handle("/", http.FileServer(http.FS(uiFS)))
