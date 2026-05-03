@@ -1,97 +1,56 @@
-# go-server — EMBFinder Backend
+<div align="center">
 
-The core Go service that powers EMBFinder's local embroidery search engine.
+# go-server
 
----
+**EMBFinder Backend — Go 1.22**
 
-## Architecture
+[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square&logo=go)](https://go.dev)
+[![SQLite](https://img.shields.io/badge/SQLite-WAL%20mode-003B57?style=flat-square&logo=sqlite)](https://sqlite.org)
+[![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](../LICENSE)
 
-```
-go-server/
-├── main.go            # Entry point, Wails window + HTTP server bootstrap
-├── config.go          # Environment config, port allocation, GC tuning
-├── handlers.go        # HTTP route handlers (search, clear, open-file, browse)
-├── indexer.go         # Background sync engine + IndexState machine
-├── search.go          # Parallel cosine-similarity CLIP search (min-heap, Top-K)
-├── db.go              # SQLite persistence (WAL mode, write mutex)
-├── drives.go          # OS drive/mount detection (Linux/macOS/Windows)
-├── drives_select.go   # Drive selection state + /api/index/start handler
-├── clip.go            # Local ONNX CLIP embedding (MobileCLIP-B, CPU)
-├── watcher.go         # FSNotify real-time file watcher
-└── ui/                # Embedded web UI (HTML + CSS + JS, no build step)
-    ├── index.html
-    ├── style.css
-    └── app.js
-```
+</div>
+
+The Go binary that orchestrates the entire search pipeline. It handles HTTP routing, background indexing, in-memory vector search, SQLite persistence, and real-time file watching — with zero runtime dependencies beyond the binary itself.
 
 ---
 
-## How to Run
+## Source Layout
 
-> **The Go module lives in `go-server/`, not the project root.**
+| File | Responsibility |
+|------|----------------|
+| `main.go` | Entry point; Wails window bootstrap + HTTP server |
+| `config.go` | Environment config, port resolution, GC tuning |
+| `handlers.go` | HTTP route handlers (search, preview, browse, clear) |
+| `indexer.go` | Background EMB walker, dual-embedding pipeline, `findAllSidecars()` |
+| `search.go` | Parallel sharded cosine-similarity, dual-vector max scoring |
+| `db.go` | SQLite WAL, `dbUpsertDual()` for render + sidecar vectors |
+| `drives.go` | OS mount detection (Linux `/proc/mounts`, macOS `/Volumes`, Windows A–Z) |
+| `drives_select.go` | Drive selection state, `/api/drives/*` and `/api/index/start` handlers |
+| `clip.go` | Stub — production embedding uses the Python service |
+| `watcher.go` | `fsnotify` recursive watcher; triggers re-index on file changes |
+| `ui/` | Embedded web UI (vanilla HTML + CSS + JS, no build step required) |
+
+---
+
+## Build and Run
+
+> The Go module lives inside `go-server/`. Always run commands from this directory.
 
 ```bash
-# 1. Enter the correct directory
 cd go-server
 
-# 2. Development (headless HTTP server, no Wails desktop window)
+# Development — headless HTTP only (no desktop window)
 HEADLESS=1 go run .
 
-# 3. Development (with Wails desktop window — needs wails CLI)
+# Development — with Wails desktop window
 go run .
 
-# 4. Build a production binary
+# Production binary
 go build -o embfind .
-./embfind
+HEADLESS=1 ./embfind
 ```
 
-> ❌ Running `go run .` from `/img_emb_finder/` root will fail — there is no `main.go` there.
-
----
-
-## API Reference
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/drives` | List all detected drives with selection state |
-| `POST` | `/api/drives/select` | Set which drives to scan: `{"paths": [...]}` |
-| `GET` | `/api/index/state/stream` | SSE stream of live indexing progress |
-| `GET` | `/api/index/start` | Trigger immediate scan of selected drives |
-| `GET` | `/api/index/toggle` | Pause / resume background auto-sync |
-| `POST` | `/api/search` | Search by image or `.EMB` file (multipart `file`) |
-| `GET` | `/api/preview/{id}` | Serve the stored PNG render of a design |
-| `GET` | `/api/thumbnail/{id}` | Serve the sidecar photo of a design |
-| `GET` | `/api/latest` | Latest 50 indexed `.EMB` designs |
-| `GET` | `/api/browse` | Paginated EMB library: `?page=1&q=rose` |
-| `POST` | `/api/clear` | Wipe database + memory index |
-| `POST` | `/api/open-file` | Open file folder in OS file manager |
-
----
-
-## Search Algorithm
-
-The `Search()` function in `search.go` uses a **parallel sharded min-heap**:
-
-1. Snapshot the in-memory `[]Entry` slice under `RLock` (non-blocking for concurrent indexing).
-2. Partition the snapshot across `(NumCPU - 1)` goroutines — one CPU left free for OS/UI.
-3. Each goroutine runs a **local min-heap of size K** — O(N/W × log K) per shard.
-4. Merge all shards and sort — O(W·K · log(W·K)).
-5. Total complexity: **O(N log K / W)** — typically 5–10× faster than a single-threaded scan.
-
----
-
-## Indexing Pipeline
-
-```
-Drive Walk → fileID (SHA-256 content DNA)
-               ├─ Cache Hit (same path + mtime + size) → skip
-               ├─ Hash Match (renamed/moved file) → update metadata only
-               └─ New File
-                    ├─ .EMB → find sidecar JPG, or callEmbEnginePreview()
-                    └─ Image → local ONNX CLIP or Python embedder fallback
-                         ↓
-                    dbUpsert(entry, png, vector) + globalIndex.Add(entry)
-```
+The server starts on **port 8765** by default.
 
 ---
 
@@ -99,23 +58,105 @@ Drive Walk → fileID (SHA-256 content DNA)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODE` | `development` | `development` or `production` |
-| `PORT` | `8765` | HTTP server port |
+| `PORT` | `8765` | HTTP listen port |
 | `EMBEDDER_PORT` | `8766` | Python embedder port |
-| `EMBEDDER_URL` | auto | Full embedder URL override |
-| `EMB_ENGINE_URL` | `http://localhost:8767` | Wilcom EmbEngine URL |
+| `EMBEDDER_URL` | auto-built | Full embedder base URL (overrides port) |
+| `EMB_ENGINE_URL` | `http://localhost:8767` | EMB rendering engine URL |
 | `HEADLESS` | `0` | `1` = skip Wails desktop window |
-| `DB_PATH` | `data/embfinder.db` | SQLite database path |
+| `DB_PATH` | `data/embfinder.db` | SQLite database file path |
+
+---
+
+## API Reference
+
+| Method | Endpoint | Body / Params | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/` | — | Serves the embedded web UI |
+| `POST` | `/api/search` | `multipart`: `file`, `top_k` | Embed query image and return top-K results |
+| `GET` | `/api/drives/list` | — | All detected drives with usable + selected flags |
+| `POST` | `/api/drives/select` | `{"paths": [...]}` | Set which directories to scan |
+| `GET` | `/api/index/state/stream` | — | SSE stream: live progress, counts, running flag |
+| `POST` | `/api/index/start` | — | Trigger immediate scan of selected drives |
+| `GET` | `/api/index/toggle` | — | Pause / resume background auto-sync |
+| `GET` | `/api/preview/{id}` | — | PNG render of design (base64-decoded from DB) |
+| `GET` | `/api/thumbnail/{id}` | — | Sidecar garment photo |
+| `GET` | `/api/latest` | — | 50 most recently indexed designs |
+| `GET` | `/api/browse` | `?page=1&q=text` | Paginated EMB library |
+| `DELETE` | `/api/clear` | — | Wipe SQLite database and in-memory index |
+| `POST` | `/api/open-file` | `{"path": "..."}` | Open design's folder in OS file manager |
+
+---
+
+## Search Algorithm
+
+Implemented in `search.go` — parallel sharded min-heap:
+
+1. Snapshot the in-memory `[]Entry` slice under `RLock` (non-blocking).
+2. Partition across `max(1, NumCPU−1)` goroutines.
+3. Each goroutine maintains a **local min-heap of size K** — `O(N/W × log K)`.
+4. Merge all shards and sort — `O(W·K · log(W·K))`.
+5. **Dual-vector scoring:** `score = max(render_cosine, sidecar_cosine)`.
+
+**Complexity:** `O(N log K / W)` — typically 5–10× faster than single-threaded scan.
+
+---
+
+## Indexing Pipeline
+
+```
+Drive Walk
+  └── For each .EMB file
+        ├── Compute fileID (SHA-256 of content)
+        ├── Cache hit (same path + mtime + size) → skip
+        ├── Hash match (renamed/moved) → update metadata only
+        └── New or changed
+              ├── Render preview: OLE2 → PyEmbroidery → placeholder
+              ├── Embed render via Python /embed
+              ├── Find ALL sidecar images (findAllSidecars)
+              │     └── Embed each via /embed-augmented (6 views)
+              │           → Average all views → L2-normalise → sidecar_vector
+              └── dbUpsertDual(render_vec, sidecar_vec, preview_png)
+                  globalIndex.Add(entry)
+```
+
+The **dual-vector strategy** stores two independent CLIP embeddings per design:
+
+| Vector | Source | Strength |
+|--------|--------|---------|
+| Render | Flat PNG render of the `.EMB` | Exact shape/structure matching |
+| Sidecar | Augmented average of all paired garment photos | Same visual domain as query photos |
+
+---
+
+## Database Schema
+
+```sql
+CREATE TABLE designs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path        TEXT NOT NULL UNIQUE,
+    file_name        TEXT NOT NULL,
+    file_hash        TEXT NOT NULL,
+    mod_time         INTEGER NOT NULL,
+    file_size        INTEGER NOT NULL,
+    preview_png      BLOB,
+    sidecar_png      BLOB,
+    render_embedding BLOB NOT NULL,   -- float32 LE, 768-dim ViT-L-14
+    sidecar_embedding BLOB,           -- float32 LE, 768-dim — NULL if no sidecar
+    indexed_at       INTEGER NOT NULL
+);
+```
 
 ---
 
 ## Dependencies
 
 ```bash
-go mod tidy   # Install all dependencies
+go mod tidy   # resolve and tidy all dependencies
 ```
 
-Key packages:
-- `github.com/wailsapp/wails/v2` — native desktop window
-- `modernc.org/sqlite` — pure-Go SQLite (no CGO required)
-- `github.com/joho/godotenv` — `.env` file loading
+| Package | Purpose |
+|---------|---------|
+| `modernc.org/sqlite` | Pure-Go SQLite (no CGO) |
+| `github.com/wailsapp/wails/v2` | Native desktop window |
+| `github.com/joho/godotenv` | `.env` file loading |
+| `github.com/fsnotify/fsnotify` | Cross-platform file watching |

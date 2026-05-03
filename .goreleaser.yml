@@ -1,46 +1,149 @@
-# GoReleaser — builds EMBFinder as native .exe / .deb / .dmg
-# Run: goreleaser release --snapshot --clean
+# ─────────────────────────────────────────────────────────────────────────────
+# EMBFinder — GoReleaser Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Build production binaries for Linux, Windows, and macOS in one command.
+#
+# Prerequisites:
+#   go install github.com/goreleaser/goreleaser/v2@latest
+#
+# Local snapshot (no git tag required, no publish):
+#   goreleaser release --snapshot --clean
+#
+# Production release (requires a git tag v1.x.x):
+#   git tag v1.0.0
+#   goreleaser release --clean
+#
+# Output: dist/
+#   embfinder_1.0.0_linux_amd64.tar.gz
+#   embfinder_1.0.0_linux_arm64.tar.gz
+#   embfinder_1.0.0_windows_amd64.zip
+#   embfinder_1.0.0_darwin_amd64.tar.gz
+#   embfinder_1.0.0_darwin_arm64.tar.gz   ← Apple Silicon
+#   embfinder_1.0.0_linux_amd64.deb       ← Debian/Ubuntu package
+#   checksums.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: 2
 project_name: embfinder
 
+# ── Build ─────────────────────────────────────────────────────────────────────
 builds:
   - id: embfinder
     dir: go-server
     binary: embfinder
-    env: [CGO_ENABLED=0]
-    goos:  [linux, windows, darwin]
-    goarch: [amd64, arm64]
+
+    # CGO_ENABLED=0 → fully static binary, no libc dependency.
+    # This is what makes the binary run on any Linux distro without installing
+    # anything. On Windows it removes the MSVC runtime requirement.
+    env:
+      - CGO_ENABLED=0
+
+    # Target platforms
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+    # Windows arm64 is not a practical target (no mainstream hardware yet)
     ignore:
       - goos: windows
         goarch: arm64
-    ldflags: ["-s", "-w", "-X main.version={{.Version}}"]
 
+    # ldflags:
+    #   -s   strip symbol table     → removes function names, reduces binary size
+    #   -w   strip DWARF debug info → removes file/line info, reduces binary size
+    #   -X   inject version string  → prints correctly in --version output
+    #
+    # Together -s -w typically reduce binary size by 25-35%.
+    # Do NOT add -trimpath here; GoReleaser handles reproducible builds itself.
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.buildDate={{.Date}}
+
+    # mod=readonly prevents accidental module changes during CI builds
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# ── Archives ─────────────────────────────────────────────────────────────────
 archives:
   - id: embfinder
-    builds: [embfinder]
+    ids: [embfinder]
     name_template: "embfinder_{{.Version}}_{{.Os}}_{{.Arch}}"
+
+    # Windows users expect .zip; everyone else gets .tar.gz
     format_overrides:
       - goos: windows
         format: zip
 
-nfpms:
-  - package_name: embfinder
-    homepage: https://github.com/yourorg/embfinder
-    description: "Embroidery Visual Search Engine"
-    maintainer: "EMBFinder"
-    license: MIT
-    formats: [deb, rpm, apk]
-    bindir: /usr/local/bin
-
-dmgbuild:
-  - name: EMBFinder
-    volume_name: EMBFinder
-    output_path: "dist/EMBFinder_{{.Version}}.dmg"
+    # Include essential files alongside the binary
     files:
-      - src: "dist/embfinder_{{.Version}}_darwin_amd64/embfinder"
-        dst: EMBFinder
+      - README.md
+      - LICENSE
+      - .env.example
 
+# ── Linux packages ────────────────────────────────────────────────────────────
+nfpms:
+  - id: linux-packages
+    package_name: embfinder
+    homepage: https://github.com/RhythmItaliya/EMBFinder
+    description: |
+      Image-to-embroidery visual search engine.
+      Upload a garment photo to find the matching .EMB design in under 50 ms.
+    maintainer: EMBFinder Contributors
+    license: MIT
+    formats:
+      - deb    # Debian, Ubuntu
+      - rpm    # Fedora, RHEL, openSUSE
+      - apk    # Alpine Linux
+    bindir: /usr/local/bin
+    contents:
+      - src: README.md
+        dst: /usr/share/doc/embfinder/README.md
+      - src: .env.example
+        dst: /etc/embfinder/env.example
+
+# ── Checksums ─────────────────────────────────────────────────────────────────
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
 
+# ── Changelog (auto-generated from git commits) ───────────────────────────────
+# Uses Conventional Commits format. Run `git log --oneline` to see commit messages.
+# Types shown in the release notes:
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: "New Features"
+      regexp: "^feat"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "Performance"
+      regexp: "^perf"
+      order: 2
+    - title: "Other Changes"
+      order: 999
+
+# ── Snapshot naming ───────────────────────────────────────────────────────────
 snapshot:
-  name_template: "{{.Tag}}-dev"
+  # Used when building without a git tag (--snapshot flag)
+  version_template: "{{.Tag}}-dev+{{.ShortCommit}}"
+
+# ── Release metadata ──────────────────────────────────────────────────────────
+# Uncomment and configure for automatic GitHub Release creation:
+# release:
+#   github:
+#     owner: RhythmItaliya
+#     name: EMBFinder
+#   draft: false
+#   prerelease: auto    # marks as pre-release if tag contains -alpha/-beta/-rc
