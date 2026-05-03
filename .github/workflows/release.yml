@@ -32,6 +32,9 @@ on:
 permissions:
   contents: write   # required to create GitHub Releases and upload assets
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # ── 1. Run tests before releasing ──────────────────────────────────────────
   test:
