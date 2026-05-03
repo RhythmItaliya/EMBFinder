@@ -4,6 +4,8 @@
 
 **Image-to-Embroidery Visual Search Engine**
 
+[![CI](https://img.shields.io/github/actions/workflow/status/RhythmItaliya/EMBFinder/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/RhythmItaliya/EMBFinder/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/RhythmItaliya/EMBFinder?style=flat-square)](https://github.com/RhythmItaliya/EMBFinder/releases)
 [![Go](https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square&logo=go)](https://go.dev)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python)](https://python.org)
 [![CLIP](https://img.shields.io/badge/CLIP-ViT--L--14%2FOpenAI-412991?style=flat-square)](https://github.com/mlfoundations/open_clip)
@@ -74,36 +76,68 @@ This eliminates the domain gap between photographic query images and synthetic t
 
 ---
 
+## Download
+
+Pre-built binaries are available on the [Releases](https://github.com/RhythmItaliya/EMBFinder/releases) page.
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| Linux x86-64 | `embfinder_vX.Y.Z_linux_amd64.tar.gz` | Static binary, no dependencies |
+| Linux ARM64 | `embfinder_vX.Y.Z_linux_arm64.tar.gz` | Raspberry Pi, AWS Graviton |
+| Linux (Debian/Ubuntu) | `embfinder_vX.Y.Z_linux_amd64.deb` | Installs systemd service |
+| Linux (Fedora/RHEL) | `embfinder_vX.Y.Z_linux_amd64.rpm` | |
+| Windows 10/11 | `embfinder_vX.Y.Z_windows_amd64.zip` | Extract and run |
+| macOS Intel | `embfinder_vX.Y.Z_darwin_amd64.tar.gz` | |
+| macOS Apple Silicon | `embfinder_vX.Y.Z_darwin_arm64.tar.gz` | M1 / M2 / M3 |
+
+> The Go binary alone is not enough. You also need the Python services (AI embedder + EMB renderer). Start them with Docker Compose — see [Quick Start](#quick-start-docker).
+
+---
+
 ## Repository Layout
 
 ```
 img_emb_finder/
-├── go-server/              Go backend (binary: embfind)
-│   ├── main.go
-│   ├── config.go
-│   ├── handlers.go
-│   ├── indexer.go
-│   ├── search.go
-│   ├── db.go
-│   ├── drives.go
-│   ├── drives_select.go
-│   ├── clip.go
-│   ├── watcher.go
-│   └── ui/                 Embedded web UI (no build step)
+├── go-server/              Go backend (binary: embfinder)
+│   ├── main_desktop.go     Desktop build — Wails native window  (!headless tag)
+│   ├── main_headless.go    Server build  — pure HTTP, opens browser (headless tag)
+│   ├── server.go           Shared startup: startCore(), buildMux()
+│   ├── config.go           All env-var config (getEnv helpers)
+│   ├── handlers.go         HTTP route handlers
+│   ├── indexer.go          Background EMB walker + dual-embedding
+│   ├── search.go           Parallel sharded cosine similarity
+│   ├── db.go               SQLite WAL (render + sidecar vectors)
+│   ├── drives.go           Drive / volume detection (Linux/Windows/macOS)
+│   ├── drives_select.go    Drive selection persistence
+│   ├── clip.go             CLIP vector type + distance math
+│   ├── watcher.go          fsnotify real-time change detection
+│   └── ui/                 Embedded web UI (HTML + CSS + JS, no build step)
+│       ├── index.html
+│       ├── style.css
+│       ├── api.js          Network layer — all fetch() calls
+│       ├── controllers.js  UI controllers (one per concern)
+│       └── app.js          Orchestrator — wires events, boots controllers
 ├── embedder/               AI embedding service (Python / FastAPI)
-│   ├── main.py             v4.0 — batched inference, AMP, no memory leaks
+│   ├── main.py             v4.0 — batched inference, AMP autocast, no memory leaks
 │   └── requirements.txt
 ├── emb-engine/             EMB rendering service (Python / Flask)
 │   ├── server.py
-│   ├── emb_renderer.py
+│   ├── emb_renderer.py     OLE2 → PyEmbroidery → Placeholder fallback chain
 │   └── requirements.txt
-├── tests/                  Test suite
+├── tests/                  Validation suite (dev mode only)
 │   ├── lib.py              Shared utilities (single source of truth)
 │   ├── quick_test.py       Fast per-query accuracy check
-│   └── mega_test.py        Comprehensive full-dataset evaluation
+│   └── mega_test.py        Full-dataset evaluation + false-positive analysis
+├── scripts/
+│   ├── postinstall.sh      systemd service registration (deb/rpm)
+│   └── preremove.sh        systemd service cleanup before uninstall
+├── .github/workflows/
+│   ├── ci.yml              Build + syntax check on every push / PR
+│   └── release.yml         Cross-platform release on tag push
+├── Makefile                Developer shortcuts (make dev, make build, make release)
 ├── docker-compose.yml
 ├── .env.example
-└── .goreleaser.yml
+└── .goreleaser.yml         GoReleaser v2 — produces 7 platform archives + .deb/.rpm
 ```
 
 ---
@@ -164,9 +198,17 @@ uvicorn main:app --host 0.0.0.0 --port 8766 --workers 1
 
 ```bash
 cd go-server
-go build -o embfind .
-HEADLESS=1 ./embfind        # headless HTTP server
-# or: go run .              # with Wails desktop window
+
+# Development (Wails desktop window + hot reload)
+go run --tags dev .
+
+# Headless HTTP server (opens browser, no native window)
+go build -tags headless -o embfinder .
+./embfinder
+
+# Or use the Makefile from the repo root
+make dev          # starts all three services
+make build        # headless Linux binary → dist/embfinder
 ```
 
 ### 4. Verify Services
@@ -204,6 +246,55 @@ python3 tests/mega_test.py --host http://192.168.1.10:8765 --data_dir /mnt/emb_l
 ```
 
 Both scripts write a JSON report to `/tmp/embfinder_mega_test.json`.
+
+Or via Makefile:
+
+```bash
+make test       # quick_test.py --skip-index
+make test-full  # mega_test.py (re-indexes library)
+```
+
+---
+
+## Building & Releasing
+
+### Local Build
+
+```bash
+# Headless binary (static, CGO_ENABLED=0 — works on any Linux with no deps)
+make build
+#   → dist/embfinder  (~9.5 MB)
+
+# Cross-compile all platforms locally (requires goreleaser)
+make build-all
+#   → go-server/dist/embfinder_*_linux_amd64.tar.gz
+#   → go-server/dist/embfinder_*_windows_amd64.zip
+#   → go-server/dist/embfinder_*_darwin_arm64.tar.gz
+#   → go-server/dist/embfinder_*_linux_amd64.deb  (+ .rpm)
+```
+
+### Publishing a Release
+
+```bash
+# Tag a version — GitHub Actions builds everything automatically
+make release VERSION=v1.0.0
+# Equivalent to:
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+The `release.yml` workflow runs on tag push and:
+
+1. **Tests:** `go vet` + headless build check
+2. **GoReleaser:** produces all 7 platform archives + `.deb` / `.rpm` → GitHub Release
+3. **Docker:** pushes `go-server`, `embedder`, `emb-engine` images to `ghcr.io`
+
+### Build Tag Reference
+
+| Command | Build Tag | Wails Window | CGO Required | Use Case |
+|---------|-----------|-------------|-------------|----------|
+| `go run --tags dev .` | `!headless` | Yes | Yes | Local desktop development |
+| `go build .` | `!headless` | Yes | Yes | Desktop app build |
+| `go build -tags headless .` | `headless` | No (browser) | No | Server, Docker, CI, releases |
 
 ---
 
@@ -272,12 +363,16 @@ cd img_emb_finder
 # Create a focused branch
 git checkout -b fix/sidecar-path-matching
 
-# Make your changes, then verify
-cd go-server && go build ./...       # Go must compile cleanly
-python3 -c "import ast; ast.parse(open('embedder/main.py').read())"
+# Make your changes, then verify all build modes
+cd go-server
+go build ./...                          # desktop build (needs CGO)
+CGO_ENABLED=0 go build -tags headless . # headless build (static)
+
+# Syntax-check Python
+python3 -m py_compile embedder/main.py emb-engine/server.py tests/lib.py
 
 # Run the test suite
-python3 tests/quick_test.py --skip-index
+make test
 
 # Commit with a conventional message
 git commit -m "fix: resolve sidecar path matching for uppercase extensions"
@@ -287,9 +382,10 @@ git push origin fix/sidecar-path-matching
 ```
 
 **PR checklist:**
-- [ ] `go build ./...` passes with no errors
+- [ ] `go build ./...` passes (desktop build)
+- [ ] `CGO_ENABLED=0 go build -tags headless .` passes (release build)
 - [ ] Python files pass `python3 -m py_compile <file>`
-- [ ] `tests/quick_test.py --skip-index` passes or accuracy does not regress
+- [ ] `make test` passes or accuracy does not regress
 - [ ] No new dependencies added without justification in the PR description
 - [ ] Changes documented in the relevant `README.md`
 
@@ -307,4 +403,4 @@ git push origin fix/sidecar-path-matching
 
 MIT — see [LICENSE](LICENSE).
 
-> **Third-party notice:** EMBFinder can interface with proprietary embroidery engines (Wilcom EmbroideryStudio, etc.). This project does not distribute or include any proprietary software. You are responsible for obtaining valid licences for any third-party engine you connect.
+> **Third Party Notice:** EMBFinder can interface with proprietary embroidery engines (Wilcom EmbroideryStudio, etc.). This project does not distribute or include any proprietary software. You are responsible for obtaining valid licences for any third-party engine you connect.

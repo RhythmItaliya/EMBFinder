@@ -1,9 +1,12 @@
 //go:build !headless
 
 // main_desktop.go — EMBFinder desktop build (Wails native window)
-// This file is compiled in the default `go build` path.
-// For server/CI/Docker builds that don't need a native window, use:
-//   go build -tags headless
+// Compiled in these cases:
+//   go build .                          (default, no tags)
+//   go run --tags dev .                 (development mode)
+//   go build -tags dev .                (development build)
+// NOT compiled when:
+//   go build -tags headless .           (server/CI/release builds)
 package main
 
 import (
@@ -18,7 +21,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
