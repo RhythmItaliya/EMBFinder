@@ -49,17 +49,23 @@ ES_EXE = find_es_exe()
 
 # ── Import native renderer ────────────────────────────────────────────────────
 try:
-    from emb_renderer import render_emb_to_png as _native_render
+    from emb_renderer import render_emb_to_png as _native_render, _HAS_PYEMB
     _HAS_NATIVE = True
     print("[EmbEngine] ✓ Native OLE2 renderer loaded")
 except ImportError as e:
     _HAS_NATIVE = False
+    _HAS_PYEMB  = False
     print(f"[EmbEngine] ✗ Native renderer not available: {e}")
 
 if ES_EXE:
     print(f"[EmbEngine] ✓ ES.EXE found at: {ES_EXE} (will prefer for high-quality renders)")
 else:
     print("[EmbEngine] ES.EXE not found — using native OLE2 renderer")
+
+if _HAS_PYEMB:
+    print("[EmbEngine] ✓ Embroidermodder / pyembroidery stitch renderer available")
+else:
+    print("[EmbEngine] pyembroidery not installed — stitch render disabled (pip install pyembroidery)")
 
 
 def wine_env():
@@ -98,7 +104,14 @@ def health():
         "status": "ok",
         "es_exe": ES_EXE or None,
         "native_renderer": _HAS_NATIVE,
+        "pyembroidery_renderer": _HAS_PYEMB,
         "render_size": RENDER_SIZE,
+        "active_strategies": (
+            (["wine"]     if ES_EXE     else []) +
+            (["ole2"]     if _HAS_NATIVE else []) +
+            (["pyembroidery"] if _HAS_PYEMB else []) +
+            ["placeholder"]
+        ),
     })
 
 

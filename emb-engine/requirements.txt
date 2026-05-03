@@ -1,2 +1,5 @@
 flask
 pillow
+olefile
+pyembroidery
+python-dotenv
