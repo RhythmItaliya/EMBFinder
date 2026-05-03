@@ -1,0 +1,143 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .github/workflows/release.yml
+#
+# Triggered by: git tag push  (v*)
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# Produces (uploaded to GitHub Releases):
+#   embfinder_v1.0.0_linux_amd64.tar.gz       ← Linux x86-64
+#   embfinder_v1.0.0_linux_arm64.tar.gz       ← Linux ARM64 (Raspberry Pi, AWS Graviton)
+#   embfinder_v1.0.0_linux_amd64.deb          ← Debian / Ubuntu
+#   embfinder_v1.0.0_linux_amd64.rpm          ← Fedora / RHEL
+#   embfinder_v1.0.0_windows_amd64.zip        ← Windows 10/11 (x86-64)
+#   embfinder_v1.0.0_darwin_amd64.tar.gz      ← macOS Intel
+#   embfinder_v1.0.0_darwin_arm64.tar.gz      ← macOS Apple Silicon (M1/M2/M3)
+#   checksums.txt
+#
+# Build strategy:
+#   All binaries use -tags headless (CGO_ENABLED=0 → fully static, no runtime deps).
+#   The native Wails desktop window is disabled; the app opens the system browser.
+#   Python services (embedder, emb-engine) are distributed separately via
+#   Docker Compose — see docker-compose.yml in the repository root.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'        # triggers on v1.0.0, v1.2.3-beta, etc.
+
+permissions:
+  contents: write   # required to create GitHub Releases and upload assets
+
+jobs:
+  # ── 1. Run tests before releasing ──────────────────────────────────────────
+  test:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-server/go.mod
+          cache-dependency-path: go-server/go.sum
+
+      - name: Run Go tests
+        working-directory: go-server
+        run: |
+          CGO_ENABLED=0 go vet -tags headless ./...
+          CGO_ENABLED=0 go build -tags headless ./...
+
+  # ── 2. Build cross-platform binaries with GoReleaser ───────────────────────
+  release:
+    name: GoReleaser
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # GoReleaser needs full history for changelog
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-server/go.mod
+          cache-dependency-path: go-server/go.sum
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+          version: latest
+
+      - name: Run GoReleaser
+        working-directory: go-server
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: goreleaser release --clean
+
+  # ── 3. Build & push Docker images ─────────────────────────────────────────
+  docker:
+    name: Docker Images
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write           # required for ghcr.io push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version tag
+        id: meta
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "repo=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Build & push go-server
+        uses: docker/build-push-action@v6
+        with:
+          context: go-server
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.repo }}/go-server:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ steps.meta.outputs.repo }}/go-server:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Build & push embedder
+        uses: docker/build-push-action@v6
+        with:
+          context: embedder
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.repo }}/embedder:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ steps.meta.outputs.repo }}/embedder:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Build & push emb-engine
+        uses: docker/build-push-action@v6
+        with:
+          context: emb-engine
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.repo }}/emb-engine:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ steps.meta.outputs.repo }}/emb-engine:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max

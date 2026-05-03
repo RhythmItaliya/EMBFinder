@@ -1,0 +1,101 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .github/workflows/ci.yml — Pull Request and branch CI
+#
+# Runs on every push to main and every pull request.
+# Fast feedback: lint + build both variants + Python syntax check.
+# Does NOT publish anything.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'go-server/**'
+      - 'embedder/**'
+      - 'emb-engine/**'
+      - 'tests/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  go-build:
+    name: Go — Build & Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-server/go.mod
+          cache-dependency-path: go-server/go.sum
+
+      - name: Vet (headless)
+        working-directory: go-server
+        run: CGO_ENABLED=0 go vet -tags headless ./...
+
+      - name: Build headless (Linux, static binary)
+        working-directory: go-server
+        run: |
+          CGO_ENABLED=0 go build -tags headless \
+            -ldflags="-s -w -X main.version=ci-${{ github.sha }}" \
+            -o /tmp/embfinder-headless .
+          echo "Binary size: $(du -sh /tmp/embfinder-headless | cut -f1)"
+
+      - name: Cross-compile Windows
+        working-directory: go-server
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -tags headless \
+            -ldflags="-s -w -X main.version=ci-${{ github.sha }}" \
+            -o /tmp/embfinder-windows.exe .
+          echo "Windows binary: $(du -sh /tmp/embfinder-windows.exe | cut -f1)"
+
+      - name: Cross-compile macOS (Intel)
+        working-directory: go-server
+        env:
+          GOOS: darwin
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -tags headless \
+            -ldflags="-s -w -X main.version=ci-${{ github.sha }}" \
+            -o /tmp/embfinder-darwin .
+          echo "macOS binary: $(du -sh /tmp/embfinder-darwin | cut -f1)"
+
+      - name: Cross-compile macOS (Apple Silicon)
+        working-directory: go-server
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          go build -tags headless \
+            -ldflags="-s -w -X main.version=ci-${{ github.sha }}" \
+            -o /tmp/embfinder-darwin-arm64 .
+          echo "macOS ARM binary: $(du -sh /tmp/embfinder-darwin-arm64 | cut -f1)"
+
+  python-check:
+    name: Python — Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Syntax check all Python files
+        run: |
+          python -m py_compile embedder/main.py
+          python -m py_compile emb-engine/server.py
+          python -m py_compile emb-engine/emb_renderer.py
+          python -m py_compile tests/lib.py
+          python -m py_compile tests/quick_test.py
+          python -m py_compile tests/mega_test.py
+          echo "All Python files pass syntax check"
