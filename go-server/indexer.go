@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -32,18 +33,6 @@ func isSupportedExt(ext string) bool {
 }
 
 func isEmbExt(ext string) bool { return strings.EqualFold(ext, ".emb") }
-
-
-// ── Services ──────────────────────────────────────────────────────────────────
-// Python Embedder URL is now provided by Config.EmbedderURL()
-
-func embEngineSvcURL() string {
-	if u := os.Getenv("EMB_ENGINE_URL"); u != "" {
-		return u
-	}
-	// Default to localhost for local development, Docker overrides this via ENV
-	return "http://localhost:8767"
-}
 
 // ── IndexState ────────────────────────────────────────────────────────────────
 
@@ -217,26 +206,12 @@ type embedResp struct {
 	PreviewB64 string    `json:"preview_b64"`
 }
 
-// callEmbedFile embeds any image file path (used during search only, not indexing).
+// callEmbedFile embeds any image file path via the Python embedder service.
 func callEmbedFile(path string) (*embedResp, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	isImg := ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp"
 
-	// ── Path 1: local ONNX CLIP ───────────────────────────────────────────────
-	if clipReady && isImg {
-		imgBytes, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		vec, err := EmbedImageBytes(imgBytes)
-		if err != nil {
-			return nil, err
-		}
-		previewB64 := base64.StdEncoding.EncodeToString(resizeForPreview(imgBytes))
-		return &embedResp{Embedding: vec, PreviewB64: previewB64}, nil
-	}
-
-	// ── Path 2: image → Python /embed ─────────────────────────────────────────
+	// image → Python /embed (multi-crop, CUDA ViT-L-14)
 	if isImg {
 		imgBytes, err := os.ReadFile(path)
 		if err != nil {
@@ -301,7 +276,7 @@ func callEmbEnginePreview(path string) []byte {
 	// Add a tiny 'breath' for the engine
 	time.Sleep(50 * time.Millisecond)
 
-	resp, err := httpClient.Post(embEngineSvcURL()+"/preview", w.FormDataContentType(), &buf)
+	resp, err := httpClient.Post(Config.EmbEngineURL()+"/preview", w.FormDataContentType(), &buf)
 	if err != nil {
 		return nil
 	}
@@ -340,14 +315,16 @@ func numIndexWorkers() int {
 
 // Entry represents a single design in the index.
 type Entry struct {
-	ID         string    `json:"id"`
-	FilePath   string    `json:"file_path"`
-	FileName   string    `json:"file_name"`
-	Format     string    `json:"format"`
-	SizeKB     float64   `json:"size_kb"`
-	FileMTime  int64     `json:"file_mtime"`
-	Vector     []float32 `json:"-"`
-	HasPreview bool      `json:"has_preview"`
+	ID            string    `json:"id"`
+	FilePath      string    `json:"file_path"`
+	FileName      string    `json:"file_name"`
+	Format        string    `json:"format"`
+	SizeKB        float64   `json:"size_kb"`
+	FileMTime     int64     `json:"file_mtime"`
+	Vector        []float32 `json:"-"` // render embedding (from EMB preview PNG)
+	SidecarVector []float32 `json:"-"` // sidecar garment-photo embedding (when available)
+	HasPreview    bool      `json:"has_preview"`
+	HasSidecar    bool      `json:"has_sidecar"`
 }
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
@@ -498,7 +475,7 @@ func StartIndexing(path string, force bool) {
 				idxState.CurrentFile = filepath.Base(fp)
 				idxState.mu.Unlock()
 
-				// Render EMB → PNG via Wilcom engine
+				// Render EMB → PNG via emb-engine
 				png := callEmbEnginePreview(fp)
 				if png == nil {
 					log.Printf("[Indexer] ✗ No render for %s — skipping", filepath.Base(fp))
@@ -506,7 +483,7 @@ func StartIndexing(path string, force bool) {
 					return
 				}
 
-				// Embed the rendered PNG as the search vector
+				// Embed the rendered PNG as the primary search vector
 				result, embErr := callEmbedRaw(png, ".png")
 				if embErr != nil || result == nil {
 					log.Printf("[Indexer] ✗ Embed failed for %s: %v", filepath.Base(fp), embErr)
@@ -514,19 +491,92 @@ func StartIndexing(path string, force bool) {
 					return
 				}
 
-				// Store entry: render PNG as preview, embedding from render
+				// ── SIDECAR: embed ALL paired garment photos if available ─────────────
+				// This is the key accuracy improvement: garment photos and query images
+				// are in the same visual domain, so matching query→sidecar is far more
+				// accurate than matching query→flat-render.
+				// We embed ALL sidecars (jpg + jpeg + png) and average them into one
+				// variation-invariant vector that covers all photo angles/formats.
+				var sidecarBytes []byte
+				var sidecarVec []float32
+				allSidecars := findAllSidecars(fp)
+				if len(allSidecars) > 0 {
+					// Read first sidecar for thumbnail
+					if b, err := os.ReadFile(allSidecars[0]); err == nil {
+						sidecarBytes = b
+					}
+					// Collect augmented embeddings from ALL sidecar photos
+					var allVecs [][]float32
+					for _, sc := range allSidecars {
+						b, err := os.ReadFile(sc)
+						if err != nil {
+							continue
+						}
+						vecs, err := callEmbedAugmented(b, filepath.Base(sc))
+						if err == nil && len(vecs) > 0 {
+							allVecs = append(allVecs, vecs...)
+							log.Printf("[Indexer] ✓ Sidecar: %s (%d views)", filepath.Base(sc), len(vecs))
+						}
+					}
+					if len(allVecs) > 0 {
+						// Average ALL vectors from all sidecars into one robust representation
+						dim := len(allVecs[0])
+						avg := make([]float32, dim)
+						for _, v := range allVecs {
+							for i, x := range v {
+								avg[i] += x
+							}
+						}
+						nv := float32(len(allVecs))
+						for i := range avg {
+							avg[i] /= nv
+						}
+						// Re-normalize to unit sphere
+						var norm float32
+						for _, x := range avg {
+							norm += x * x
+						}
+						if norm > 0 {
+							norm = float32(1.0 / math.Sqrt(float64(norm)))
+							for i := range avg {
+								avg[i] *= norm
+							}
+						}
+						sidecarVec = avg
+						log.Printf("[Indexer] ✓ Sidecar vector: %d sidecars × augmented → %d total views averaged",
+							len(allSidecars), len(allVecs))
+					}
+				}
+
+				// Compress sidecar thumbnail for storage
+				var thumbBytes []byte
+				if len(sidecarBytes) > 0 {
+					if len(sidecarBytes) > 128*1024 {
+						thumbBytes = sidecarBytes[:128*1024]
+					} else {
+						thumbBytes = sidecarBytes
+					}
+				}
+
+				// Store entry: render PNG as preview, dual embeddings
 				dbRemoveByPath(fp)
 				globalIndex.RemoveByPrefix(fp)
 
+				hasSidecar := len(sidecarVec) > 0
 				e := Entry{
 					ID: id, FilePath: fp, FileName: filepath.Base(fp),
 					Format: "emb", SizeKB: float64(size) / 1024,
-					FileMTime: mtime, HasPreview: true,
+					FileMTime: mtime, HasPreview: true, HasSidecar: hasSidecar,
 				}
-				if err := dbUpsertFull(e, png, nil, result.Embedding); err == nil {
+				if err := dbUpsertDual(e, png, thumbBytes, result.Embedding, sidecarVec); err == nil {
 					e.Vector = result.Embedding
+					e.SidecarVector = sidecarVec
 					globalIndex.Add(e)
-					log.Printf("[Indexer] ✓ %s", filepath.Base(fp))
+					if hasSidecar {
+						log.Printf("[Indexer] ✓ %s [render+sidecar]", filepath.Base(fp))
+					} else {
+						log.Printf("[Indexer] ✓ %s [render only]", filepath.Base(fp))
+					}
 					if atomic.LoadInt32(&idxState.Progress)%10 == 0 {
 						RefreshIdxStateCounts()
 					}
@@ -543,18 +593,35 @@ func StartIndexing(path string, force bool) {
 
 var triggerScan = make(chan struct{}, 1)
 
+// findSidecar returns the first matching sidecar image file for an EMB (for thumbnail).
 func findSidecar(embPath string) string {
-	dir := filepath.Dir(embPath)
-	base := strings.TrimSuffix(filepath.Base(embPath), filepath.Ext(embPath))
-	
-	// Try common extensions
-	for _, ext := range []string{".jpg", ".JPG", ".png", ".PNG", ".jpeg", ".JPEG"} {
-		side := filepath.Join(dir, base+ext)
-		if _, err := os.Stat(side); err == nil {
-			return side
-		}
+	all := findAllSidecars(embPath)
+	if len(all) > 0 {
+		return all[0]
 	}
 	return ""
+}
+
+// findAllSidecars returns ALL matching sidecar image files (jpg, jpeg, png) for an EMB.
+// This allows embedding multiple garment photos of the same design into one averaged vector.
+func findAllSidecars(embPath string) []string {
+	dir := filepath.Dir(embPath)
+	base := strings.TrimSuffix(filepath.Base(embPath), filepath.Ext(embPath))
+
+	var found []string
+	seen := make(map[string]bool)
+	for _, ext := range []string{".jpg", ".JPG", ".jpeg", ".JPEG", ".png", ".PNG"} {
+		side := filepath.Join(dir, base+ext)
+		if _, err := os.Stat(side); err == nil {
+			// Deduplicate case-insensitive on same base name
+			key := strings.ToLower(side)
+			if !seen[key] {
+				seen[key] = true
+				found = append(found, side)
+			}
+		}
+	}
+	return found
 }
 
 func interruptibleSleep(d time.Duration) {

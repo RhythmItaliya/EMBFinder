@@ -253,7 +253,6 @@ func hSearch(w http.ResponseWriter, r *http.Request) {
 		"results":       filtered,
 		"query":         header.Filename,
 		"total_indexed": globalIndex.Count(),
-		"clip_local":    clipReady,
 	})
 }
 
@@ -312,6 +311,32 @@ func callEmbedImageMulti(imgBytes []byte, name string) ([][]float32, error) {
 	json.NewDecoder(resp.Body).Decode(&r)
 	if len(r.Embeddings) == 0 {
 		return nil, fmt.Errorf("no embeddings returned")
+	}
+	return r.Embeddings, nil
+}
+
+// callEmbedAugmented calls the /embed-augmented endpoint, which returns embeddings
+// for 6 augmented views of the image (flip, ±5° rotations, ±15% brightness).
+// Used for sidecar photo indexing to create a variation-invariant representation.
+func callEmbedAugmented(imgBytes []byte, name string) ([][]float32, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, _ := w.CreateFormFile("file", name)
+	fw.Write(imgBytes)
+	w.Close()
+
+	resp, err := httpClient.Post(Config.EmbedderURL()+"/embed-augmented", w.FormDataContentType(), &buf)
+	if err != nil {
+		// Fall back to regular multi-crop if augmented endpoint not available
+		return callEmbedImageMulti(imgBytes, name)
+	}
+	defer resp.Body.Close()
+	var r struct {
+		Embeddings [][]float32 `json:"embeddings"`
+	}
+	json.NewDecoder(resp.Body).Decode(&r)
+	if len(r.Embeddings) == 0 {
+		return callEmbedImageMulti(imgBytes, name)
 	}
 	return r.Embeddings, nil
 }
@@ -484,7 +509,7 @@ func hEmbInfo(w http.ResponseWriter, r *http.Request) {
 	mw.WriteField("file_path", filePath)
 	mw.Close()
 
-	resp, err := httpClient.Post(embEngineSvcURL()+"/info", mw.FormDataContentType(), &buf)
+	resp, err := httpClient.Post(Config.EmbEngineURL()+"/info", mw.FormDataContentType(), &buf)
 	if err != nil {
 		// emb-engine offline: return best-effort info from DB
 		var sizeKB float64
