@@ -6,5 +6,4 @@ torch>=2.2.0
 torchvision>=0.17.0
 Pillow>=10.0
 numpy>=1.24
-pystitch>=1.0
-svgelements>=1.9
+opencv-python-headless>=4.8.0
