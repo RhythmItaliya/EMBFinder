@@ -43,14 +43,7 @@ func linuxDrives() []DriveEntry {
 	var entries []DriveEntry
 	seen := map[string]bool{}
 
-	// 1. Priority: Test Data Folder
-	testPath := "/home/rhythm/Documents/test_data"
-	if _, err := os.Stat(testPath); err == nil {
-		entries = append(entries, DriveEntry{Path: testPath, Label: "🧪 Test Data Folder"})
-		seen[testPath] = true
-	}
-
-	// 2. Home directory
+	// 1. Home directory
 	home, _ := os.UserHomeDir()
 	if home != "" && !seen[home] {
 		entries = append(entries, DriveEntry{Path: home, Label: "Home (" + home + ")"})

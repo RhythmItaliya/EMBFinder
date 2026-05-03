@@ -150,11 +150,11 @@ const SyncController = (() => {
 // MODE=production strips test paths), but we also guard here client-side.
 // ─────────────────────────────────────────────────────────────────────────────
 const DriveController = (() => {
-  // Paths that should never appear in a production build's drive list
-  const DEV_ONLY_PATTERNS = [/\/tests\//i, /\\tests\\/i, /test_data/i];
+  // Paths that should never appear in the drive list
+  const EXCLUDED_PATTERNS = [/\/tests\//i, /\\tests\\/i, /test_data/i, /\/test$/i, /\\test$/i];
 
-  function _isDevPath(path) {
-    return DEV_ONLY_PATTERNS.some(r => r.test(path));
+  function _isExcludedPath(path) {
+    return EXCLUDED_PATTERNS.some(r => r.test(path));
   }
 
   async function reload() {
@@ -171,11 +171,8 @@ const DriveController = (() => {
       return;
     }
 
-    // In production (MODE=production injected by /config.js) hide dev paths
-    const isDev = !(window.APP_MODE === 'production');
-
     list.innerHTML = drives
-      .filter(dr => isDev || !_isDevPath(dr.path))
+      .filter(dr => !_isExcludedPath(dr.path))
       .map(dr => {
         const ok    = dr.usable;
         const count = dr.indexed || 0;
