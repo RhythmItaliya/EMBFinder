@@ -137,7 +137,7 @@ jobs:
         with:
           context: emb-engine
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: |
             ghcr.io/${{ steps.meta.outputs.repo }}/emb-engine:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ steps.meta.outputs.repo }}/emb-engine:latest
