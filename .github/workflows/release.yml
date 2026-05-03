@@ -76,7 +76,6 @@ jobs:
           version: latest
 
       - name: Run GoReleaser
-        working-directory: go-server
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: goreleaser release --clean

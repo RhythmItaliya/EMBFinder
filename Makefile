@@ -89,7 +89,7 @@ build-all:
 	@echo "Building all platforms with GoReleaser (snapshot)..."
 	@which goreleaser > /dev/null 2>&1 || \
 		(echo "Install: go install github.com/goreleaser/goreleaser/v2@latest" && exit 1)
-	cd $(GO_SERVER) && goreleaser release --snapshot --clean
+	goreleaser release --snapshot --clean
 	@echo ""
 	@echo "Artifacts in $(GO_SERVER)/dist/"
 
