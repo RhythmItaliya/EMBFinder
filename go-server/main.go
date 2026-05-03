@@ -162,7 +162,7 @@ func autoStartEmbedder() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),
-		"CLIP_MODEL=ViT-L-14",
+		"CLIP_MODEL="+Config.CLIPModel, // forwarded from .env / CLIP_MODEL env var
 	)
 
 	if err := cmd.Start(); err != nil {
@@ -228,11 +228,11 @@ func findPython() string {
 func checkEmbEngine() {
 	time.Sleep(5 * time.Second)
 	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(embEngineSvcURL() + "/health")
+	resp, err := client.Get(Config.EmbEngineURL() + "/health")
 	if err != nil || resp.StatusCode != 200 {
-		log.Printf("\033[33mWARNING: EmbEngine offline at %s — .EMB files will be skipped\033[0m", embEngineSvcURL())
+		log.Printf("[WARN] EmbEngine offline at %s — EMB preview rendering unavailable", Config.EmbEngineURL())
 		return
 	}
 	resp.Body.Close()
-	log.Printf("\033[32mSUCCESS: EmbEngine Automation Server is connected and ready!\033[0m")
+	log.Printf("[OK] EmbEngine connected at %s", Config.EmbEngineURL())
 }

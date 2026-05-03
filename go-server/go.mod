@@ -6,9 +6,8 @@ toolchain go1.22.2
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/joho/godotenv v1.5.1
 	github.com/wailsapp/wails/v2 v2.12.0
-	github.com/yalue/onnxruntime_go v1.10.0
-	golang.org/x/image v0.18.0
 	modernc.org/sqlite v1.29.9
 )
 
@@ -22,7 +21,6 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/labstack/echo/v4 v4.13.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
