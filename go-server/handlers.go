@@ -16,8 +16,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+)
+
+var (
+	embedderMu    sync.Mutex
+	searchWaiters int32
 )
 
 // ── Shared persistent HTTP client (connection pooling to Python embedder) ─────
@@ -294,6 +300,11 @@ func hThumbnail(w http.ResponseWriter, r *http.Request) {
 
 
 func callEmbedImageMulti(imgBytes []byte, name string) ([][]float32, error) {
+	atomic.AddInt32(&searchWaiters, 1)
+	embedderMu.Lock()
+	defer embedderMu.Unlock()
+	defer atomic.AddInt32(&searchWaiters, -1)
+
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	fw, _ := w.CreateFormFile("file", name)
@@ -319,6 +330,12 @@ func callEmbedImageMulti(imgBytes []byte, name string) ([][]float32, error) {
 // for 6 augmented views of the image (flip, ±5° rotations, ±15% brightness).
 // Used for sidecar photo indexing to create a variation-invariant representation.
 func callEmbedAugmented(imgBytes []byte, name string) ([][]float32, error) {
+	for atomic.LoadInt32(&searchWaiters) > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	embedderMu.Lock()
+	defer embedderMu.Unlock()
+
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	fw, _ := w.CreateFormFile("file", name)
@@ -529,3 +546,44 @@ func hEmbInfo(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// ── POST /api/open-truesizer ──────────────────────────────────────────────────
+// Opens the EMB file in the TrueSizer GUI via the emb-engine /open endpoint.
+// Non-blocking: TrueSizer launches in the background for interactive inspection.
+func hOpenTrueSizer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+		ID   string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, errJSON("invalid body"))
+		return
+	}
+
+	filePath := body.Path
+	if filePath == "" && body.ID != "" {
+		var err error
+		filePath, err = dbGetPath(body.ID)
+		if err != nil || filePath == "" {
+			writeJSON(w, errJSON("design not found"))
+			return
+		}
+	}
+	if filePath == "" {
+		writeJSON(w, errJSON("no path provided"))
+		return
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("file_path", filePath)
+	mw.Close()
+
+	resp, err := httpClient.Post(Config.EmbEngineURL()+"/open", mw.FormDataContentType(), &buf)
+	if err != nil {
+		writeJSON(w, errJSON("emb-engine offline: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	io.Copy(w, resp.Body)
+}

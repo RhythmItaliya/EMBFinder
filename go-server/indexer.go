@@ -221,6 +221,12 @@ func callEmbedFile(path string) (*embedResp, error) {
 	}
 
 	// ── Path 3: any file → Python /embed-file ─────────────────────────────────
+	for atomic.LoadInt32(&searchWaiters) > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	embedderMu.Lock()
+	defer embedderMu.Unlock()
+
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("file_path", path)
@@ -242,6 +248,12 @@ func callEmbedFile(path string) (*embedResp, error) {
 }
 
 func callEmbedRaw(imgBytes []byte, ext string) (*embedResp, error) {
+	for atomic.LoadInt32(&searchWaiters) > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	embedderMu.Lock()
+	defer embedderMu.Unlock()
+
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	part, _ := mw.CreateFormFile("file", "image"+ext)
