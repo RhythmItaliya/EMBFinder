@@ -1,16 +1,11 @@
 /* ================================================================
    controllers.js — EMBFinder UI controllers
-   One controller per concern.  app.js just boots them.
    ================================================================ */
 'use strict';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared helpers
-// ─────────────────────────────────────────────────────────────────────────────
-const $  = id => document.getElementById(id);
-const qs = sel => document.querySelector(sel);
+const $ = id => document.getElementById(id);
 
-// Toast notification
+// ── Toast ─────────────────────────────────────────────────────────────────────
 const Toast = (() => {
   let _tid;
   function show(msg, type = 'info') {
@@ -24,21 +19,18 @@ const Toast = (() => {
   return { show };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SyncController  — SSE stream + Stop/Start Sync button
-// ─────────────────────────────────────────────────────────────────────────────
+// ── SyncController ────────────────────────────────────────────────────────────
 const SyncController = (() => {
-  let _es       = null;
-  let _paused   = false;
-  let _indexed  = 0;
+  let _es      = null;
+  let _paused  = false;
+  let _indexed = 0;
 
   function start() {
     if (_es && _es.readyState !== EventSource.CLOSED) return;
     _es = new EventSource(API.streamUrl());
 
     _es.onopen = () => {
-      $('dot').className       = 'dot dot--ok';
+      $('dot').className        = 'dot dot--ok';
       $('statusTxt').textContent = `Online — ${_indexed.toLocaleString()} designs`;
     };
 
@@ -46,28 +38,18 @@ const SyncController = (() => {
       const d = JSON.parse(e.data);
       _indexed = d.total_indexed || 0;
       _paused  = !!d.user_paused;
-
-      // Status dot
-      $('dot').className       = 'dot dot--ok';
+      $('dot').className        = 'dot dot--ok';
       $('statusTxt').textContent = `Online — ${_indexed.toLocaleString()} designs`;
-
-      // Sync button label
       _renderSyncBtn();
-
-      // Format counts sidebar
       if (d.counts) _renderCounts(d.counts);
-
-      // Progress bar
       const running = d.running || (d.status && d.status !== 'Idle' && d.status !== 'idle');
       running ? _showProgress(d) : $('progressWrap').classList.add('hidden');
-
-      // Notify search that the count changed
       document.dispatchEvent(new CustomEvent('emb:indexed', { detail: { count: _indexed } }));
     };
 
     _es.onerror = () => {
       _es.close(); _es = null;
-      $('dot').className       = 'dot dot--err';
+      $('dot').className        = 'dot dot--err';
       $('statusTxt').textContent = 'Offline — retrying…';
       setTimeout(start, 3000);
     };
@@ -105,7 +87,6 @@ const SyncController = (() => {
 
   function getCount() { return _indexed; }
 
-  // ── private ──────────────────────────────────────────────────────────────
   function _renderSyncBtn() {
     const btn = $('syncToggleBtn'), txt = $('syncToggleText');
     btn.classList.toggle('btn--success',  _paused);
@@ -142,26 +123,13 @@ const SyncController = (() => {
   return { start, toggle, clearAll, getCount };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DriveController  — load & toggle drive checkboxes
-// In development mode the tests/ directory drive entry is surfaced;
-// in production mode it is hidden automatically by the server (Go config.go
-// MODE=production strips test paths), but we also guard here client-side.
-// ─────────────────────────────────────────────────────────────────────────────
+// ── DriveController ───────────────────────────────────────────────────────────
 const DriveController = (() => {
-  // Paths that should never appear in the drive list
-  const EXCLUDED_PATTERNS = [/\/tests\//i, /\\tests\\/i, /test_data/i, /\/test$/i, /\\test$/i];
-
-  function _isExcludedPath(path) {
-    return EXCLUDED_PATTERNS.some(r => r.test(path));
-  }
-
   async function reload() {
     try {
       const d = await API.get('/api/drives');
       _render(d.drives || []);
-    } catch { /* silent on network error */ }
+    } catch { /* silent */ }
   }
 
   function _render(drives) {
@@ -170,24 +138,19 @@ const DriveController = (() => {
       list.innerHTML = '<div class="txt-sm txt-muted">No drives found</div>';
       return;
     }
-
-    list.innerHTML = drives
-      .filter(dr => !_isExcludedPath(dr.path))
-      .map(dr => {
-        const ok    = dr.usable;
-        const count = dr.indexed || 0;
-        const badge = count > 0
-          ? `<span class="drive-badge">${count.toLocaleString()}</span>`
-          : '';
-        const cls   = ok ? 'drive-item' : 'drive-item drive-item--disabled';
-        const label = dr.label || dr.path;
-        return `<label class="${cls}">
-          <input type="checkbox" class="drive-check" data-path="${dr.path}"
-                 ${dr.selected ? 'checked' : ''} ${ok ? '' : 'disabled'}>
-          <span class="drive-label" title="${dr.path}">${label}</span>
-          ${badge}
-        </label>`;
-      }).join('');
+    list.innerHTML = drives.map(dr => {
+      const ok    = dr.usable;
+      const count = dr.indexed || 0;
+      const badge = count > 0 ? `<span class="drive-badge">${count.toLocaleString()}</span>` : '';
+      const cls   = ok ? 'drive-item' : 'drive-item drive-item--disabled';
+      const label = dr.label || dr.path;
+      return `<label class="${cls}">
+        <input type="checkbox" class="drive-check" data-path="${dr.path}"
+               ${dr.selected ? 'checked' : ''} ${ok ? '' : 'disabled'}>
+        <span class="drive-label" title="${dr.path}">${label}</span>
+        ${badge}
+      </label>`;
+    }).join('');
 
     list.querySelectorAll('.drive-check').forEach(cb =>
       cb.addEventListener('change', _onToggle)
@@ -197,13 +160,9 @@ const DriveController = (() => {
   async function _onToggle(e) {
     const checked = e.target.checked;
     const path    = e.target.dataset.path;
-    const msg     = checked
-      ? `Add "${path}" and start indexing?`
-      : `Remove "${path}" from the index?`;
+    const msg     = checked ? `Add "${path}" and start indexing?` : `Remove "${path}" from the index?`;
     if (!confirm(msg)) { e.target.checked = !checked; return; }
-
-    const selected = [...document.querySelectorAll('.drive-check:checked')]
-      .map(c => c.dataset.path);
+    const selected = [...document.querySelectorAll('.drive-check:checked')].map(c => c.dataset.path);
     try {
       await API.postJSON('/api/drives/select', { paths: selected });
       if (checked) {
@@ -218,63 +177,86 @@ const DriveController = (() => {
   return { reload };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DropController  — drag-and-drop / file picker
-// ─────────────────────────────────────────────────────────────────────────────
+// ── DropController ────────────────────────────────────────────────────────────
 const DropController = (() => {
-  let _file    = null;
-  let _objUrl  = null;   // revoked on every new file to prevent memory leak
+  let _file   = null;
+  let _objUrl = null;
 
   function wire() {
     const dz    = $('dropZone');
     const input = $('fileInput');
+    const overlay = $('globalDropZone');
 
-    dz.addEventListener('click',     () => input.click());
-    dz.addEventListener('dragenter', e => { e.preventDefault(); dz.classList.add('is-dragover'); });
-    dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('is-dragover'); });
-    dz.addEventListener('dragleave', () => dz.classList.remove('is-dragover'));
-    dz.addEventListener('drop', e => {
+    dz.addEventListener('click', () => input.click());
+
+    // File input fallback
+    input.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+    $('clearFileBtn').addEventListener('click', e => { e.stopPropagation(); clearFile(); });
+
+    // --- Global Drag & Drop ---
+    let dragCounter = 0;
+    window.addEventListener('dragenter', e => {
       e.preventDefault();
-      dz.classList.remove('is-dragover');
+      dragCounter++;
+      if (overlay) overlay.classList.remove('hidden');
+    });
+    window.addEventListener('dragover', e => {
+      e.preventDefault();
+      // Drop effect
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    window.addEventListener('dragleave', () => {
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        if (overlay) overlay.classList.add('hidden');
+      }
+    });
+    window.addEventListener('drop', e => {
+      e.preventDefault();
+      dragCounter = 0;
+      if (overlay) overlay.classList.add('hidden');
+      
       const f = e.dataTransfer.files[0];
       if (f) setFile(f);
     });
-    input.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
-    $('clearFileBtn').addEventListener('click', e => { e.stopPropagation(); clearFile(); });
+
+    // --- Global Paste (Ctrl+V) ---
+    document.addEventListener('paste', e => {
+      // Don't intercept if user is typing in a text input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      for (let index in items) {
+        const item = items[index];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          // generate a filename for the pasted image
+          const ext = item.type.split('/')[1] || 'png';
+          const file = new File([blob], `pasted-image.${ext}`, { type: item.type });
+          setFile(file);
+          break;
+        }
+      }
+    });
   }
 
   function setFile(f) {
     _revokeUrl();
     _file = f;
-
-    const ext   = f.name.split('.').pop().toLowerCase();
-    const isEmb = ext === 'emb';
-
+    const isEmb = f.name.split('.').pop().toLowerCase() === 'emb';
     $('previewName').textContent = f.name;
-    $('previewType').textContent = isEmb ? '.EMB — render preview via EmbEngine' : 'Ready to search';
+    $('previewType').textContent = isEmb ? '.EMB — find similar designs' : 'Ready to search';
     $('dzEmpty').style.display   = 'none';
     $('dzPreview').classList.add('is-visible');
-
     if (isEmb) {
-      // SVG placeholder for EMB files (no bitmap thumbnail)
-      $('previewThumb').src = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'
-        width='64' height='64' viewBox='0 0 24 24' fill='none'
-        stroke='%232563eb' stroke-width='1.5'>
-        <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/>
-        <polyline points='14 2 14 8 20 8'/><line x1='16' y1='13' x2='8' y2='13'/>
-        <line x1='16' y1='17' x2='8' y2='17'/></svg>`;
+      $('previewThumb').src = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='1.5'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><polyline points='14 2 14 8 20 8'/></svg>`;
     } else {
       _objUrl = URL.createObjectURL(f);
       $('previewThumb').src = _objUrl;
     }
-
     $('searchBtn').disabled = false;
-
-    // Auto-search if library is ready
-    if (SyncController.getCount() > 0) {
-      SearchController.run();
-    }
+    if (SyncController.getCount() > 0) SearchController.run();
   }
 
   function clearFile() {
@@ -288,20 +270,16 @@ const DropController = (() => {
     SearchController.clear();
   }
 
-  function getFile()  { return _file; }
-  function getObjUrl() { return _objUrl; }
+  function getFile() { return _file; }
 
   function _revokeUrl() {
     if (_objUrl) { URL.revokeObjectURL(_objUrl); _objUrl = null; }
   }
 
-  return { wire, setFile, clearFile, getFile, getObjUrl };
+  return { wire, setFile, clearFile, getFile };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SearchController  — run search, render result cards (EMB only)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── SearchController ──────────────────────────────────────────────────────────
 const SearchController = (() => {
   let _timer = null;
 
@@ -312,9 +290,8 @@ const SearchController = (() => {
     const btn = $('searchBtn');
     const bar = $('searchingBar');
     const t0  = Date.now();
+    let secs  = 0;
 
-    // Live timer in searching bar
-    let secs = 0;
     clearInterval(_timer);
     bar.innerHTML = `<div class="dot dot--pulse"></div><span id="searchTimerTxt">Searching… 0s</span>`;
     _timer = setInterval(() => {
@@ -335,18 +312,15 @@ const SearchController = (() => {
       const d = await API.post('/api/search', fd);
       if (d.error) { Toast.show(d.error, 'err'); _showEmpty(); return; }
 
-      // Results from the server are already EMB-only — no client filtering needed
-      const results = (d.results || []).filter(r =>
-        /\.emb$/i.test(r.file_name || '')
-      );
-
+      const results = (d.results || []).filter(r => /\.emb$/i.test(r.file_name || ''));
       _renderCards(results);
+
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      $('resultsTitle').textContent = results.length
+      $('resultsTitle').textContent  = results.length
         ? `${results.length} matching EMB design${results.length !== 1 ? 's' : ''}`
         : 'No matching designs found';
-      $('searchTime').textContent   = `${elapsed}s`;
-      $('resultsBar').style.display = '';
+      $('searchTime').textContent    = `${elapsed}s`;
+      $('resultsBar').style.display  = '';
       $('searchGridWrap').style.display = '';
     } catch (e) {
       Toast.show('Search failed: ' + e.message, 'err');
@@ -359,13 +333,12 @@ const SearchController = (() => {
   }
 
   function clear() {
-    $('resultsBar').style.display     = 'none';
-    $('searchGridWrap').style.display = 'none';
+    $('resultsBar').style.display      = 'none';
+    $('searchGridWrap').style.display  = 'none';
     $('searchEmptyState').style.display = '';
     $('resultsGrid').innerHTML = '';
   }
 
-  // ── private ──────────────────────────────────────────────────────────────
   function _renderCards(results) {
     const grid = $('resultsGrid');
     grid.innerHTML = '';
@@ -377,13 +350,13 @@ const SearchController = (() => {
       </div>`;
       return;
     }
-
     results.forEach(item => {
       const card  = document.createElement('div');
       card.className = 'card';
-      const pct   = (item.score * 100).toFixed(1);
-      const sCls  = item.score >= 0.6 ? 'score--high' : item.score >= 0.3 ? 'score--mid' : '';
+      const pct    = (item.score * 100).toFixed(1);
+      const sCls   = item.score >= 0.6 ? 'score--high' : item.score >= 0.3 ? 'score--mid' : '';
       const sizeKb = item.size_kb ? item.size_kb.toFixed(0) + ' KB' : '';
+      const folder = _folderLabel(item.file_path);
       card.innerHTML = `
         <div class="card__render">
           <img src="${API.previewUrl(item.id)}"
@@ -395,27 +368,39 @@ const SearchController = (() => {
         </div>
         <div class="card__body">
           <div class="card__name" title="${item.file_name}">${item.file_name}</div>
+          ${folder ? `<div class="card__folder txt-11 txt-muted">${folder}</div>` : ''}
           <div class="card__row">
             <span class="tag tag--sm">EMB</span>
             <span class="txt-11 txt-muted">${sizeKb}</span>
+            <span class="tag tag--sm tag--score ${sCls}">${pct}%</span>
           </div>
         </div>`;
-      card.onclick = () => ModalController.open(item, false);
+      card.onclick = () => ModalController.open(item);
       grid.appendChild(card);
     });
   }
 
   function _showEmpty() { $('searchEmptyState').style.display = ''; }
 
+  // Extract a human-readable folder label from a file path
+  // e.g. /media/rhythm/Millie/SHIVAM/BLUEDARK-17/ALLOVER-13/s(1).EMB -> BLUEDARK-17 › ALLOVER-13
+  function _folderLabel(path) {
+    if (!path) return '';
+    const parts = path.split('/');
+    if (parts.length < 3) return '';
+    // last two parent folders before the filename
+    const p2 = parts[parts.length - 3] || '';
+    const p1 = parts[parts.length - 2] || '';
+    if (!p1) return '';
+    return p2 && p2 !== p1 ? `${p2} › ${p1}` : p1;
+  }
+
   return { run, clear };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LibraryController  — paginated EMB browser
-// ─────────────────────────────────────────────────────────────────────────────
+// ── LibraryController ─────────────────────────────────────────────────────────
 const LibraryController = (() => {
-  let _page = 1, _total = 0, _pages = 1, _filter = '', _debounce = null;
+  let _page = 1, _pages = 1, _filter = '', _debounce = null;
 
   async function load(page = 1, filter = '') {
     _page = page; _filter = filter;
@@ -427,8 +412,8 @@ const LibraryController = (() => {
       let url = `/api/browse?page=${page}&page_size=48`;
       if (_filter) url += '&q=' + encodeURIComponent(_filter);
       const d = await API.get(url);
-      _total = d.total || 0; _pages = d.pages || 1;
-      $('libCount').textContent = _total.toLocaleString() + ' designs'
+      _pages = d.pages || 1;
+      $('libCount').textContent = (d.total || 0).toLocaleString() + ' designs'
         + (_filter ? ` matching "${_filter}"` : '');
       grid.innerHTML = '';
 
@@ -445,6 +430,7 @@ const LibraryController = (() => {
       d.items.forEach(item => {
         const card = document.createElement('div');
         card.className = 'card';
+        const folder = _folderLabel(item.file_path);
         card.innerHTML = `
           <div class="card__render">
             ${item.has_preview
@@ -456,12 +442,13 @@ const LibraryController = (() => {
           </div>
           <div class="card__body">
             <div class="card__name" title="${item.file_name}">${item.file_name}</div>
+            ${folder ? `<div class="card__folder txt-11 txt-muted">${folder}</div>` : ''}
             <div class="card__row">
               <span class="tag tag--sm">EMB</span>
               <span class="txt-11 txt-muted">${item.size_kb ? item.size_kb.toFixed(0) + ' KB' : ''}</span>
             </div>
           </div>`;
-        card.onclick = () => ModalController.open(item, true);
+        card.onclick = () => ModalController.open(item);
         grid.appendChild(card);
       });
 
@@ -480,48 +467,28 @@ const LibraryController = (() => {
 
   function _renderPagination() {
     if (_pages <= 1) { $('libPagination').innerHTML = ''; return; }
-    let h = _page > 1
-      ? `<button class="pag-btn" onclick="LibraryController.load(${_page - 1}, LibraryController.getFilter())">← Prev</button>` : '';
+    let h = _page > 1 ? `<button class="pag-btn" onclick="LibraryController.load(${_page - 1}, LibraryController.getFilter())">← Prev</button>` : '';
     const s = Math.max(1, _page - 3), e = Math.min(_pages, _page + 3);
     if (s > 1) h += `<button class="pag-btn" onclick="LibraryController.load(1,LibraryController.getFilter())">1</button><span class="pag-ellipsis">…</span>`;
     for (let i = s; i <= e; i++)
-      h += `<button class="pag-btn${i === _page ? ' pag-btn--active' : ''}"
-               onclick="LibraryController.load(${i},LibraryController.getFilter())">${i}</button>`;
+      h += `<button class="pag-btn${i === _page ? ' pag-btn--active' : ''}" onclick="LibraryController.load(${i},LibraryController.getFilter())">${i}</button>`;
     if (e < _pages) h += `<span class="pag-ellipsis">…</span><button class="pag-btn" onclick="LibraryController.load(${_pages},LibraryController.getFilter())">${_pages}</button>`;
     if (_page < _pages) h += `<button class="pag-btn" onclick="LibraryController.load(${_page + 1},LibraryController.getFilter())">Next →</button>`;
     $('libPagination').innerHTML = h;
   }
 
   function getFilter() { return _filter; }
-
   return { load, wireSearch, getFilter };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ModalController  — EMB detail viewer
-// Opens with: Open Folder button + Copy Path button only.
-// "Use as Query" removed — user uploads their own image to search.
-// ─────────────────────────────────────────────────────────────────────────────
+// ── ModalController ───────────────────────────────────────────────────────────
 const ModalController = (() => {
-  let _item       = null;
-  let _queryObjUrl = null;   // revoked when modal closes
+  let _item = null;
 
-  function open(item, isLibrary) {
+  function open(item) {
     _item = item;
-    _revokeQueryUrl();
 
-    // ── Query pane (only in search mode) ───────────────────────────────────
-    const qPane = $('modalQueryPane');
-    if (!isLibrary && DropController.getFile()) {
-      _queryObjUrl = URL.createObjectURL(DropController.getFile());
-      $('modalQueryImg').src = _queryObjUrl;
-      qPane.style.display = '';
-    } else {
-      qPane.style.display = 'none';
-    }
-
-    // ── Render pane ────────────────────────────────────────────────────────
+    // Render pane
     const render = $('modalRender');
     $('embViewer').classList.remove('no-render');
     render.classList.remove('loaded');
@@ -529,64 +496,129 @@ const ModalController = (() => {
     _viewerZoom = 1;
     render.style.transform = '';
 
-    // ── Match badge ────────────────────────────────────────────────────────
+    // Match badge
     const badge = $('matchBadge');
-    if (!isLibrary && item.score) {
+    if (item.score) {
       const pct = (item.score * 100).toFixed(1);
-      badge.textContent = pct + '% match';
-      badge.className   = 'match-badge '
-        + (item.score >= 0.6 ? 'match--high' : item.score >= 0.3 ? 'match--mid' : 'match--low');
+      badge.textContent  = pct + '% match';
+      badge.className    = 'match-badge ' + (item.score >= 0.6 ? 'match--high' : item.score >= 0.3 ? 'match--mid' : 'match--low');
       badge.style.display = '';
     } else {
       badge.style.display = 'none';
     }
 
-    // ── Info panel ─────────────────────────────────────────────────────────
-    $('modalTitle').textContent   = item.file_name;
-    $('modalPath').textContent    = item.file_path || '';
-    $('modalFormat').textContent  = (item.format || 'emb').toUpperCase();
-    $('metaStitches').textContent = '—';
-    $('metaTrims').textContent    = '—';
-    $('metaColors').textContent   = '—';
-    $('metaSize').textContent     = item.size_kb ? item.size_kb.toFixed(1) + ' KB' : '—';
-    $('modalEngineStatus').textContent = '';
-    $('metaLoading').style.display = '';
+    // Info
+    $('modalTitle').textContent  = item.file_name;
+    $('modalPath').textContent   = item.file_path || '';
+    // Folder breadcrumb
+    const parts = (item.file_path || '').split('/');
+    const p2 = parts[parts.length - 3] || '';
+    const p1 = parts[parts.length - 2] || '';
+    const folderEl = $('modalFolder');
+    if (folderEl) folderEl.textContent = (p2 && p2 !== p1) ? `${p2} › ${p1}` : p1;
+
+    // Reset button states
+    _resetBtn('openTruesizerBtn', 'Open in TrueSizer');
+    _resetBtn('openFolderBtn',    'Open Folder');
+
+    // Stitch info has been removed to rely exclusively on TrueSizer engine
 
     $('modalBg').classList.add('is-open');
-    _fetchInfo(item);
+  }
+
+  // Reset stitch panel to loading spinner
+  function _resetStitchInfo() {
+    const loading = document.getElementById('stitchLoading');
+    const grid    = document.getElementById('stitchGrid');
+    const src     = document.getElementById('stitchSrc');
+    if (loading) loading.classList.remove('hidden');
+    if (grid)    grid.classList.add('hidden');
+    if (src)     src.classList.add('hidden');
+    ['infoStitches','infoTrims','infoColors','infoSize'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    });
+  }
+
+  // Fetch real stitch info from emb-engine
+  function _fetchStitchInfo(item) {
+    const payload = item.id ? { id: item.id } : { path: item.file_path };
+    API.embInfo(payload)
+      .then(d => {
+        const loading = document.getElementById('stitchLoading');
+        const grid    = document.getElementById('stitchGrid');
+        const srcEl   = document.getElementById('stitchSrc');
+        if (loading) loading.classList.add('hidden');
+        if (grid)    grid.classList.remove('hidden');
+
+        const fmt = n => (n == null || n === undefined) ? '—' : Number(n).toLocaleString();
+        const s = document.getElementById('infoStitches'); if (s) s.textContent = fmt(d.stitch_count);
+        const t = document.getElementById('infoTrims');    if (t) t.textContent = fmt(d.trim_count);
+        const c = document.getElementById('infoColors');   if (c) c.textContent = fmt(d.color_count);
+        const z = document.getElementById('infoSize');     if (z) z.textContent = d.size_kb ? d.size_kb + ' KB' : '—';
+
+        if (srcEl) {
+          const label = d.source === 'pyembroidery' ? '✓ Accurate — read by pyembroidery'
+                      : d.source === 'ole2_header'  ? '⚠ Estimated — OLE2 header'
+                      : '— Source unknown';
+          srcEl.textContent = label;
+          srcEl.className   = 'stitch-info__src ' + (d.source === 'pyembroidery' ? 'src--ok' : 'src--warn');
+          srcEl.classList.remove('hidden');
+        }
+      })
+      .catch(() => {
+        const loading = document.getElementById('stitchLoading');
+        const grid    = document.getElementById('stitchGrid');
+        if (loading) loading.classList.add('hidden');
+        if (grid)    grid.classList.remove('hidden');
+      });
   }
 
   function close() {
     $('modalBg').classList.remove('is-open');
-    _revokeQueryUrl();
     _item = null;
   }
 
-  // ── Viewer zoom ───────────────────────────────────────────────────────────
+  // Zoom
   let _viewerZoom = 1;
   function zoom(factor) {
     _viewerZoom = factor === 1 ? 1 : Math.max(0.3, Math.min(4, _viewerZoom * factor));
     $('modalRender').style.transform = `scale(${_viewerZoom})`;
   }
 
-  // ── Open folder in OS file manager ───────────────────────────────────────
+  // Open in TrueSizer — shows spinner until response
+  async function openInTrueSizer() {
+    if (!_item?.file_path) return;
+    const btn = $('openTruesizerBtn');
+    _setBusy(btn, 'Opening…');
+    try {
+      const res = await API.postJSON('/api/open-truesizer', { path: _item.file_path });
+      if (res.error) Toast.show('TrueSizer: ' + res.error, 'err');
+      else           Toast.show(`Opened in TrueSizer ✓`, 'success');
+    } catch (e) { Toast.show('Could not open TrueSizer: ' + e.message, 'err'); }
+    finally    { _resetBtn(btn, 'Open in TrueSizer'); }
+  }
+
+  // Open Folder — shows spinner until file manager opens
   async function openFolder() {
     if (!_item) return;
+    const btn = $('openFolderBtn');
+    _setBusy(btn, 'Opening…');
     try {
       const res = await API.postJSON('/api/open-file', { id: _item.id, path: _item.file_path });
       if (res.error) Toast.show(res.error, 'err');
-      else           Toast.show('Opened folder');
+      else           Toast.show('Folder opened', 'success');
     } catch { Toast.show('Could not open folder', 'err'); }
+    finally  { _resetBtn(btn, 'Open Folder'); }
   }
 
-  // ── Copy path to clipboard ────────────────────────────────────────────────
+  // Copy path
   async function copyPath() {
     if (!_item?.file_path) return;
     try {
       await navigator.clipboard.writeText(_item.file_path);
       Toast.show('Path copied', 'success');
     } catch {
-      // Fallback for non-https or older browsers
       const inp = document.createElement('input');
       inp.value = _item.file_path;
       document.body.appendChild(inp);
@@ -597,48 +629,32 @@ const ModalController = (() => {
     }
   }
 
-  // ── private ──────────────────────────────────────────────────────────────
-  async function _fetchInfo(item) {
-    try {
-      const info = await API.postJSON('/api/emb-info', { id: item.id, path: item.file_path });
-      $('metaLoading').style.display = 'none';
-      if (info.error && !info.stitch_count) {
-        $('modalEngineStatus').textContent = '⚠ ' + info.error; return;
-      }
-      $('metaStitches').textContent = info.stitch_count != null ? info.stitch_count.toLocaleString() : '—';
-      $('metaTrims').textContent    = info.trim_count   != null ? info.trim_count.toLocaleString()   : '—';
-      $('metaColors').textContent   = info.color_count  != null ? info.color_count.toLocaleString()  : '—';
-      $('metaSize').textContent     = info.size_kb       ? info.size_kb + ' KB'                      : '—';
-      $('modalEngineStatus').textContent = info.engine_ready ? '✓ Engine connected' : '○ Estimates only';
-    } catch {
-      $('metaLoading').style.display = 'none';
-      $('modalEngineStatus').textContent = '⚠ Metadata unavailable';
-    }
+  // Helpers
+  function _setBusy(btn, label) {
+    if (typeof btn === 'string') btn = $(btn);
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-spinner"></span>${label}`;
   }
 
-  function _revokeQueryUrl() {
-    if (_queryObjUrl) { URL.revokeObjectURL(_queryObjUrl); _queryObjUrl = null; }
+  function _resetBtn(btn, label) {
+    if (typeof btn === 'string') btn = $(btn);
+    if (!btn) return;
+    btn.disabled = false;
+    btn.textContent = label;
   }
 
-  return { open, close, zoom, openFolder, copyPath };
+  return { open, close, zoom, openFolder, copyPath, openInTrueSizer };
 })();
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TabController  — switch between Visual Search and EMB Library tabs
-// ─────────────────────────────────────────────────────────────────────────────
+// ── TabController ─────────────────────────────────────────────────────────────
 const TabController = (() => {
-  let _current = 'search';
-
   function switchTo(tab) {
-    _current = tab;
-    $('panelSearch').classList.toggle('hidden', tab !== 'search');
+    $('panelSearch').classList.toggle('hidden',  tab !== 'search');
     $('panelLibrary').classList.toggle('hidden', tab !== 'library');
     $('tabSearch').classList.toggle('tab-btn--active',  tab === 'search');
     $('tabLibrary').classList.toggle('tab-btn--active', tab === 'library');
     if (tab === 'library') LibraryController.load(1, LibraryController.getFilter());
   }
-
-  function current() { return _current; }
-  return { switchTo, current };
+  return { switchTo };
 })();

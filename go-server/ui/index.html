@@ -14,10 +14,10 @@
 
 <div class="app">
 
-  <!-- ── Header ───────────────────────────────────────────────────────────── -->
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
   <header class="header">
     <div class="header__brand">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="brand-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
         <circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="1.5"/>
         <path d="M8 12 Q12 6 16 12 Q12 18 8 12Z" fill="#2563eb" opacity=".7"/>
         <circle cx="12" cy="12" r="2" fill="#2563eb"/>
@@ -47,7 +47,7 @@
     </div>
   </header>
 
-  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
   <aside class="sidebar">
     <div class="sidebar__scroll-area">
 
@@ -79,7 +79,7 @@
     </div>
   </aside>
 
-  <!-- ══════════ VISUAL SEARCH TAB ═════════════════════════════════════════ -->
+  <!-- ════════ VISUAL SEARCH TAB ══════════════════════════════════════════ -->
   <main class="main" id="panelSearch">
     <div class="search-bar">
       <div class="drop-zone" id="dropZone">
@@ -151,7 +151,7 @@
     </div>
   </main>
 
-  <!-- ══════════ LIBRARY TAB ══════════════════════════════════════════════ -->
+  <!-- ════════ LIBRARY TAB ════════════════════════════════════════════════ -->
   <main class="main hidden" id="panelLibrary">
     <div class="lib-toolbar">
       <div class="lib-search-wrap">
@@ -170,7 +170,7 @@
 
 </div><!-- /.app -->
 
-<!-- ══════════ EMB VIEWER MODAL ══════════════════════════════════════════ -->
+<!-- ════════ EMB VIEWER MODAL ══════════════════════════════════════════ -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
     <button class="modal__close" id="modalCloseBtn" aria-label="Close">
@@ -181,18 +181,10 @@
 
     <div class="modal__layout">
 
-      <!-- LEFT: Query image (search mode only) -->
-      <div class="modal__query-pane" id="modalQueryPane">
-        <div class="pane-label">Your Search Image</div>
-        <div class="pane-img-wrap">
-          <img id="modalQueryImg" src="" alt="query image">
-        </div>
-      </div>
-
-      <!-- CENTER: EMB Render — dark embroidery viewer -->
+      <!-- LEFT: EMB Render — dark embroidery viewer -->
       <div class="modal__render-pane">
         <div class="pane-label">
-          <span id="renderLabel">Embroidery Render</span>
+          <span>Embroidery Render</span>
           <span class="match-badge" id="matchBadge" style="display:none"></span>
         </div>
         <div class="emb-viewer" id="embViewer">
@@ -218,97 +210,61 @@
         </div>
       </div>
 
-      <!-- RIGHT: EMB Metadata panel -->
+      <!-- RIGHT: File info + actions -->
       <div class="modal__info-pane">
         <div class="modal__file-header">
           <div class="modal__file-name" id="modalTitle">Design.EMB</div>
+          <div class="modal__folder txt-11 txt-muted" id="modalFolder"></div>
           <div class="modal__file-path" id="modalPath"></div>
         </div>
 
-        <!-- Stitch stats -->
-        <div class="stat-section">
-          <div class="stat-section__label">Stitch Details</div>
-          <div class="stat-grid">
-            <div class="stat-item">
-              <div class="stat-item__icon stitch-icon">⬡</div>
-              <div>
-                <div class="stat-item__val" id="metaStitches">—</div>
-                <div class="stat-item__key">Stitches</div>
-              </div>
-            </div>
-            <div class="stat-item">
-              <div class="stat-item__icon trim-icon">✂</div>
-              <div>
-                <div class="stat-item__val" id="metaTrims">—</div>
-                <div class="stat-item__key">Trims</div>
-              </div>
-            </div>
-            <div class="stat-item">
-              <div class="stat-item__icon color-icon">◉</div>
-              <div>
-                <div class="stat-item__val" id="metaColors">—</div>
-                <div class="stat-item__key">Colors</div>
-              </div>
-            </div>
-            <div class="stat-item">
-              <div class="stat-item__icon size-icon">⬜</div>
-              <div>
-                <div class="stat-item__val" id="metaSize">—</div>
-                <div class="stat-item__key">File Size</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Format -->
-        <div class="stat-section">
-          <div class="stat-section__label">File Info</div>
-          <div class="format-row">
-            <span class="format-badge" id="modalFormat">EMB</span>
-            <span class="txt-sm txt-muted" id="modalEngineStatus"></span>
-          </div>
-        </div>
-
-        <!-- Loading spinner -->
-        <div class="meta-loading" id="metaLoading">
-          <div class="spinner"></div>
-          <span>Loading design info…</span>
-        </div>
-
-        <!-- Action buttons: Open Folder + Copy Path only -->
         <div class="modal-actions">
-          <button class="btn btn--primary btn--full" id="openFolderBtn">
+          <button class="btn btn--wilcom btn--full" id="openTruesizerBtn"
+                  onclick="ModalController.openInTrueSizer()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/>
+              <path d="M8 2v16M16 6v16"/>
+            </svg>
+            Open in TrueSizer
+          </button>
+          <button class="btn btn--primary btn--full" id="openFolderBtn"
+                  onclick="ModalController.openFolder()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
             Open Folder
           </button>
-          <button class="btn btn--outline btn--full" id="copyPathBtn">
+          <button class="btn btn--outline btn--full" id="copyPathBtn"
+                  onclick="ModalController.copyPath()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
             </svg>
             Copy Path
           </button>
         </div>
-
       </div>
+
     </div>
   </div>
 </div>
 
 <div id="toast" class="toast hidden"></div>
 
-<!--
-  Script load order:
-  1. config.js  — injected by Go: sets window.API_BASE and window.APP_MODE
-  2. api.js     — network layer (uses API_BASE)
-  3. controllers.js — all UI controllers (use API)
-  4. app.js     — orchestrator: wires events and boots
--->
 <script src="config.js"></script>
 <script src="api.js"></script>
 <script src="controllers.js"></script>
 <script src="app.js"></script>
 
+
+  <!-- Global Drop Overlay -->
+  <div id="globalDropZone" class="global-drop hidden">
+    <div class="global-drop__content">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+      </svg>
+      <h2>Drop Image to Search</h2>
+    </div>
+  </div>
 </body>
+
 </html>

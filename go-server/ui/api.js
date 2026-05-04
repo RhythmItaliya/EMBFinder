@@ -33,5 +33,12 @@ const API = (() => {
     thumbnailUrl: id => base() + '/api/thumbnail/' + id,
 
     streamUrl: () => base() + '/api/index/state/stream',
+
+    // Fetch real stitch info for an EMB design (id or path)
+    embInfo: (payload) => _req('POST', '/api/emb-info', JSON.stringify(payload), true),
+
+    // Open TrueSizer / folder — return promises for spinner integration
+    openTrueSizer: (payload) => _req('POST', '/api/open-truesizer', JSON.stringify(payload), true),
+    openFolder:    (payload) => _req('POST', '/api/open-file',      JSON.stringify(payload), true),
   };
 })();
