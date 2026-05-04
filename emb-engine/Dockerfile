@@ -47,7 +47,7 @@ RUN if [ "$SKIP_ES" != "1" ] && [ -n "$ES_INSTALLER" ] && [ -f "/tmp/ctx/$ES_INS
 
 # Python Flask server
 WORKDIR /app
-RUN pip3 install flask pillow --no-cache-dir
+RUN pip3 install flask pillow --no-cache-dir --break-system-packages
 COPY server.py /app/server.py
 
 EXPOSE 8767
