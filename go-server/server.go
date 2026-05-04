@@ -78,6 +78,7 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/browse",             hBrowseEMB)
 	mux.HandleFunc("/api/open-file",          hOpenFile)
 	mux.HandleFunc("/api/emb-info",           hEmbInfo)
+	mux.HandleFunc("/api/open-truesizer",     hOpenTrueSizer)
 	return mux
 }
 

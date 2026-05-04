@@ -1,198 +1,266 @@
 """
 server.py — EMB Preview & Info Service
-=======================================
-Renders Wilcom .EMB files to PNG without requiring Wine or ES.EXE.
-Uses the native OLE2 DESIGN_ICON extraction via emb_renderer.py.
+========================================
+Tiered render architecture designed for 100k+ file scale:
 
-If ES.EXE is configured and available (via Wine), it will be preferred
-for higher-quality renders. Otherwise falls back to native OLE2 extraction.
+  BULK PATH (milliseconds/file — no Wine):
+    1. OLE2 DESIGN_ICON binary extraction  (emb_renderer.py)
+       └─ The DESIGN_ICON stream IS TrueSizer's own pre-saved render.
+          Wilcom bakes it into every .EMB at save time. No Wine needed.
+    2. pyembroidery stitch renderer        (fallback)
+    3. Placeholder tile                    (always succeeds)
+
+  ON-DEMAND / INTERACTIVE (per-request, launches TrueSizer GUI):
+    POST /open              — open file in TrueSizer GUI for inspection
+    POST /render-truesizer  — live TrueSizer GUI render of one specific file
+
+Architecture rationale:
+  - 100k files × ~15s TrueSizer launch = 17 days  ← NOT viable
+  - 100k files × ~5ms OLE2 binary read  = 8 mins  ← correct approach
+  - OLE2 thumbnail is Wilcom's own render saved inside the .EMB binary
+  - TrueSizer GUI is reserved for interactive/on-demand use only
 
 Endpoints:
-  POST /preview   — file_path → 512px PNG (base64)
-  POST /info      — file_path → EMB metadata JSON
-  GET  /health    — liveness check
+  GET  /health             — liveness + strategy report
+  POST /preview            — file_path → 512px PNG (base64)  [bulk, fast]
+  POST /info               — file_path → EMB metadata JSON
+  POST /open               — open .EMB in TrueSizer GUI (interactive)
+  POST /render-truesizer   — on-demand TrueSizer render of one file
 """
-import os, subprocess, tempfile, base64, struct, zlib, io
+import os, base64, struct, zlib, io
 from pathlib import Path
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
 # Load root .env
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 app = Flask(__name__)
-
-# ── Optional: Wilcom ES.EXE via Wine ─────────────────────────────────────────
-DEFAULT_WINE_PREFIX = os.path.join(os.path.expanduser("~"), ".wine-emb-engine")
-WINE_PREFIX = os.environ.get("WINEPREFIX", DEFAULT_WINE_PREFIX)
-EMB_ENGINE_EXE = os.environ.get("EMB_ENGINE_EXEC_PATH", "")
 RENDER_SIZE = int(os.environ.get("RENDER_SIZE", "512"))
 
-def find_es_exe() -> str:
-    if EMB_ENGINE_EXE and Path(EMB_ENGINE_EXE).exists():
-        return EMB_ENGINE_EXE
-    candidates = [
-        Path(WINE_PREFIX) / "drive_c/Program Files/EmbEngine/BIN/ES.EXE",
-        Path(WINE_PREFIX) / "drive_c/Program Files (x86)/EmbEngine/BIN/ES.EXE",
-        Path(WINE_PREFIX) / "drive_c/EmbEngine/BIN/ES.EXE",
-        Path("/media/rhythm/Dharaa/Program Files/EmbEngine/BIN/ES.EXE"),
-        Path("/media/rhythm/Millie/Program Files/EmbEngine/BIN/ES.EXE"),
-        Path.home() / "EmbEngine/BIN/ES.EXE",
-    ]
-    for c in candidates:
-        if c.exists():
-            return str(c)
-    return ""
-
-ES_EXE = find_es_exe()
-
-# ── Import native renderer ────────────────────────────────────────────────────
+# ── Bulk renderer: OLE2 binary + pyembroidery  ────────────────────────────────
 try:
-    from emb_renderer import render_emb_to_png as _native_render, _HAS_PYEMB
+    from emb_renderer import render_emb_to_png as _bulk_render, _HAS_PYEMB
     _HAS_NATIVE = True
-    print("[EmbEngine] ✓ Native OLE2 renderer loaded")
+    print("[EmbEngine] ✓ OLE2 binary renderer ready  (bulk/fast path)")
 except ImportError as e:
     _HAS_NATIVE = False
     _HAS_PYEMB  = False
-    print(f"[EmbEngine] ✗ Native renderer not available: {e}")
-
-if ES_EXE:
-    print(f"[EmbEngine] ✓ ES.EXE found at: {ES_EXE} (will prefer for high-quality renders)")
-else:
-    print("[EmbEngine] ES.EXE not found — using native OLE2 renderer")
+    print(f"[EmbEngine] ✗ OLE2 renderer unavailable: {e}")
 
 if _HAS_PYEMB:
-    print("[EmbEngine] ✓ Embroidermodder / pyembroidery stitch renderer available")
+    print("[EmbEngine] ✓ pyembroidery stitch renderer available (fallback)")
+
+# ── On-demand renderer: TrueSizer e3.0 via Wine (interactive only) ────────────
+try:
+    from truesizer_renderer import (
+        open_in_truesizer        as _ts_open,
+        render_emb               as _ts_render,
+        is_available             as _ts_available,
+        TRUESIZER_EXE, WINE_PREFIX,
+    )
+    _HAS_TRUESIZER = _ts_available()
+except ImportError as _e:
+    _HAS_TRUESIZER = False
+    _ts_open       = None
+    _ts_render     = None
+    TRUESIZER_EXE  = None
+    WINE_PREFIX    = None
+    print(f"[EmbEngine] TrueSizer renderer not loaded: {_e}")
+
+if _HAS_TRUESIZER:
+    print(f"[EmbEngine] ✓ TrueSizer GUI ready  ({TRUESIZER_EXE})  [on-demand only]")
 else:
-    print("[EmbEngine] pyembroidery not installed — stitch render disabled (pip install pyembroidery)")
+    print("[EmbEngine] TrueSizer not available — /open and /render-truesizer disabled")
 
 
-def wine_env():
-    env = os.environ.copy()
-    env["WINEPREFIX"] = WINE_PREFIX
-    env["WINEDEBUG"]  = "-all"
-    env["DISPLAY"]    = ":99"
-    return env
-
-
-def render_via_wine(file_path: str) -> bytes | None:
-    """Try to render using Wilcom ES.EXE via Wine. Returns PNG bytes or None."""
-    if not ES_EXE:
-        return None
-    with tempfile.TemporaryDirectory() as tmp:
-        out_png = Path(tmp) / "preview.png"
-        try:
-            subprocess.run(
-                ["wine", ES_EXE, file_path,
-                 "/ExportBitmap", str(out_png),
-                 "/Width", str(RENDER_SIZE),
-                 "/Height", str(RENDER_SIZE),
-                 "/Exit"],
-                timeout=90, capture_output=True, env=wine_env()
-            )
-            if out_png.exists():
-                return out_png.read_bytes()
-        except Exception as e:
-            print(f"[EmbEngine] Wine render error: {e}")
-    return None
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Endpoints
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @app.get("/health")
 def health():
+    """Service liveness check with active strategy report."""
+    strategies = (
+        (["ole2"]         if _HAS_NATIVE    else []) +
+        (["pyembroidery"] if _HAS_PYEMB     else []) +
+        ["placeholder"]
+    )
     return jsonify({
-        "status": "ok",
-        "es_exe": ES_EXE or None,
-        "native_renderer": _HAS_NATIVE,
-        "pyembroidery_renderer": _HAS_PYEMB,
-        "render_size": RENDER_SIZE,
-        "active_strategies": (
-            (["wine"]     if ES_EXE     else []) +
-            (["ole2"]     if _HAS_NATIVE else []) +
-            (["pyembroidery"] if _HAS_PYEMB else []) +
-            ["placeholder"]
+        "status":                  "ok",
+        "bulk_renderer":           "ole2_binary",
+        "bulk_renderer_ready":     _HAS_NATIVE,
+        "pyembroidery_fallback":   _HAS_PYEMB,
+        "truesizer_available":     _HAS_TRUESIZER,
+        "truesizer_exe":           str(TRUESIZER_EXE) if TRUESIZER_EXE else None,
+        "wine_prefix":             str(WINE_PREFIX) if WINE_PREFIX else None,
+        "render_size":             RENDER_SIZE,
+        "active_strategies":       strategies,
+        "scale_note": (
+            "OLE2 binary: ~5ms/file (100k = 8 min). "
+            "TrueSizer GUI: ~15s/file (on-demand /open only)."
         ),
     })
 
 
 @app.post("/preview")
 def preview():
-    """Render .emb to PNG — tries Wine first, then native OLE2 extractor."""
+    """
+    BULK FAST PATH: Render .EMB → PNG via OLE2 binary extraction.
+
+    This is designed for 100k+ file indexing:
+    - Reads DESIGN_ICON stream directly from EMB binary (milliseconds/file)
+    - The DESIGN_ICON IS Wilcom's own pre-rendered thumbnail, stored inside .EMB
+    - Falls back to pyembroidery stitch render, then placeholder
+    - Does NOT launch TrueSizer — use /render-truesizer for that
+    """
     file_path = request.form.get("file_path", "")
     if not file_path or not Path(file_path).exists():
         return jsonify({"error": "file not found"}), 404
 
-    # ── Try high-quality Wine render first ────────────────────────────────────
-    png_bytes = render_via_wine(file_path)
+    png_bytes = None
 
-    # ── Fall back to native OLE2 extraction ───────────────────────────────────
-    if not png_bytes and _HAS_NATIVE:
-        png_bytes = _native_render(file_path, RENDER_SIZE)
+    # Fast binary path: OLE2 + pyembroidery
+    if _HAS_NATIVE:
+        try:
+            png_bytes = _bulk_render(file_path, RENDER_SIZE)
+        except Exception as exc:
+            print(f"[EmbEngine] bulk render error: {exc}")
 
-    if png_bytes:
-        return jsonify({"png_b64": base64.b64encode(png_bytes).decode()})
+    if not png_bytes:
+        return jsonify({"error": "preview generation failed"}), 500
 
-    return jsonify({"error": "preview generation failed"}), 500
+    return jsonify({"png_b64": base64.b64encode(png_bytes).decode()})
+
+
+@app.post("/render-truesizer")
+def render_truesizer():
+    """
+    ON-DEMAND: Render one specific .EMB using the live TrueSizer GUI.
+
+    Use this when you need TrueSizer-quality render for a specific file
+    (e.g. viewing the best match after a search). NOT for bulk indexing.
+    Response time: ~15-30 seconds per file.
+    """
+    if not _HAS_TRUESIZER:
+        return jsonify({"error": "TrueSizer not available"}), 503
+
+    file_path = request.form.get("file_path", "")
+    if not file_path or not Path(file_path).exists():
+        return jsonify({"error": "file not found"}), 404
+
+    try:
+        png_bytes = _ts_render(file_path, RENDER_SIZE)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not png_bytes:
+        return jsonify({"error": "TrueSizer render failed"}), 500
+
+    return jsonify({
+        "png_b64": base64.b64encode(png_bytes).decode(),
+        "engine":  "truesizer",
+    })
+
+
+@app.post("/open")
+def open_design():
+    """
+    Interactive: open .EMB in TrueSizer GUI for live inspection.
+    Non-blocking — TrueSizer stays open for the user to interact with.
+    """
+    if not _HAS_TRUESIZER:
+        return jsonify({"error": "TrueSizer not available"}), 503
+
+    file_path = request.form.get("file_path", "")
+    if not file_path or not Path(file_path).exists():
+        return jsonify({"error": "file not found"}), 404
+
+    proc = _ts_open(file_path)
+    if proc:
+        return jsonify({
+            "status": "opened",
+            "pid":    proc.pid,
+            "file":   Path(file_path).name,
+        })
+    return jsonify({"error": "Failed to launch TrueSizer"}), 500
 
 
 @app.post("/info")
 def emb_info():
-    """Extract EMB metadata from OLE2 binary header."""
+    """
+    Extract REAL EMB stitch metadata.
+    Strategy 1 (accurate): pyembroidery binary reader — reads actual stitch records.
+    Strategy 2 (fallback): OLE2 WilcomDesignInformationDDD header.
+    Never fabricates values — returns null if unknown.
+    """
     file_path = request.form.get("file_path", "")
     if not file_path or not Path(file_path).exists():
         return jsonify({"error": "file not found"}), 404
 
-    path = Path(file_path)
-    stat = path.stat()
-    size_kb = round(stat.st_size / 1024, 1)
+    emb_path = Path(file_path)
+    stat     = emb_path.stat()
+    size_kb  = round(stat.st_size / 1024, 1)
 
     stitch_count = None
-    color_count  = None
     trim_count   = None
+    color_count  = None
+    source       = "unknown"
 
-    # ── Parse OLE2 WilcomDesignInformationDDD for metadata ───────────────────
+    # ── Strategy 1: pyembroidery — reads actual stitch records (accurate) ─────
     try:
-        import olefile
-        ole = olefile.OleFileIO(str(path))
-        try:
-            if ole.exists("WilcomDesignInformationDDD"):
-                info_raw = ole.openstream("WilcomDesignInformationDDD").read()
-                # Scan for stitch count in design info (Wilcom stores it at various offsets)
-                for offset in (12, 8, 16, 20, 24):
-                    if offset + 4 <= len(info_raw):
-                        v = struct.unpack_from("<I", info_raw, offset)[0]
-                        if 100 <= v <= 5_000_000:
-                            stitch_count = v
-                            break
+        import pyembroidery
+        pattern = pyembroidery.read(str(emb_path))
+        if pattern is not None:
+            stitches      = pattern.stitches
+            real_stitches = [s for s in stitches if s[2] == pyembroidery.STITCH]
+            trim_stitches = [s for s in stitches if s[2] in (
+                pyembroidery.TRIM, pyembroidery.JUMP)]
+            color_changes = pattern.count_stitch_commands(pyembroidery.COLOR_CHANGE)
+            stitch_count  = len(real_stitches)
+            trim_count    = len(trim_stitches)
+            color_count   = max(1, color_changes + 1)
+            source        = "pyembroidery"
+    except Exception as exc:
+        print(f"[EmbInfo] pyembroidery failed: {exc}")
 
-            if ole.exists("AUX_INFO"):
-                aux = ole.openstream("AUX_INFO").read()
-                # Color count typically in AUX_INFO header
-                if len(aux) >= 4:
-                    v = struct.unpack_from("<H", aux, 0)[0]
-                    if 1 <= v <= 100:
-                        color_count = v
-        finally:
-            ole.close()
-    except Exception:
-        pass
-
-    # Estimate from file size if header parse failed
+    # ── Strategy 2: OLE2 Wilcom binary header ────────────────────────────────
     if stitch_count is None:
-        stitch_count = int(stat.st_size / 0.6)
-    if color_count is None:
-        color_count = max(1, min(50, round(size_kb / 3)))
+        try:
+            import olefile
+            ole = olefile.OleFileIO(str(emb_path))
+            try:
+                if ole.exists("WilcomDesignInformationDDD"):
+                    info_raw = ole.openstream("WilcomDesignInformationDDD").read()
+                    for offset in (12, 8, 16, 20, 24):
+                        if offset + 4 <= len(info_raw):
+                            v = struct.unpack_from("<I", info_raw, offset)[0]
+                            if 100 <= v <= 5_000_000:
+                                stitch_count = v
+                                source = "ole2_header"
+                                break
+                if color_count is None and ole.exists("AUX_INFO"):
+                    aux = ole.openstream("AUX_INFO").read()
+                    if len(aux) >= 4:
+                        v = struct.unpack_from("<H", aux, 0)[0]
+                        if 1 <= v <= 100:
+                            color_count = v
+            finally:
+                ole.close()
+        except Exception:
+            pass
 
-    trim_count = max(0, round(stitch_count / 500))
-
+    # Never fabricate values — return null if unknown, UI shows "—"
     return jsonify({
-        "file_name":    path.name,
+        "file_name":    emb_path.name,
         "format":       "EMB",
         "size_kb":      size_kb,
         "stitch_count": stitch_count,
-        "color_count":  color_count,
         "trim_count":   trim_count,
-        "engine_ready": bool(ES_EXE) or _HAS_NATIVE,
+        "color_count":  color_count,
+        "approximate":  stitch_count is None,
+        "source":       source,
+        "engine_ready": _HAS_NATIVE,
     })
 
 
