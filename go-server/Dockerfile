@@ -12,5 +12,5 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl
 COPY --from=build /embfinder /embfinder
 EXPOSE 8765
-ENV DB_PATH=/data/embfinder.db
+ENV EMBFIND_DATA_DIR=/data
 ENTRYPOINT ["/embfinder"]

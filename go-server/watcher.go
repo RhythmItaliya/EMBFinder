@@ -1,132 +1,268 @@
 package main
 
 import (
-	"encoding/base64"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
-var watcher *fsnotify.Watcher
+// ── Filesystem watcher ────────────────────────────────────────────────────────
+//
+// Real-time index updates for every supported file event:
+//
+//   Create (new .emb file)        → debounced single-file index
+//   Write  (file modified)        → debounced single-file index (re-embed)
+//   Remove (file deleted)         → DB + memory removal
+//   Rename (out → in pair)        → move detected via content-hash in processOneEmb
+//   Create (new directory)        → directory added recursively to watcher
+//   Sidecar .jpg/.png change      → re-index the matching .emb (so sidecar vector
+//                                   gets refreshed)
+//
+// Events are debounced per-path with a 750 ms quiet window to coalesce rapid
+// writes from editors / save-to-temp + rename patterns.
 
-// StartWatcher initializes a recursive filesystem watcher on all auto-detected drives.
+var (
+	watcher       *fsnotify.Watcher
+	watchedRoots  = map[string]bool{}
+	watchedRootMu sync.Mutex
+
+	// Debounce table: path → pending timer.
+	debounceMu sync.Mutex
+	debounce   = map[string]*time.Timer{}
+)
+
+const debounceWindow = 750 * time.Millisecond
+
+// StartWatcher initialises a recursive filesystem watcher on every selected drive.
 func StartWatcher() {
 	var err error
 	watcher, err = fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("Watcher Error: %v", err)
+		log.Printf("[Watcher] init error: %v", err)
 		return
 	}
 
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				handleWatcherEvent(event)
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Printf("Watcher Event Error: %v", err)
-			}
-		}
-	}()
+	go watcherLoop()
 
-	// Add all drives to watcher
-	drives := autoLibPaths()
-	for _, d := range drives {
-		if d.Path == "/" || strings.HasPrefix(d.Path, "/home") {
-			// Don't watch root or home (too many files/events)
-			continue
+	// Subscribe to every usable drive.
+	for _, d := range autoLibPaths() {
+		if usableDrive(d) {
+			watcherAddRoot(d.Path)
 		}
-		addRecursive(d.Path)
 	}
 }
 
-func addRecursive(path string) {
-	err := filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+// watcherAddRoot registers a drive root and walks it to add every subdirectory.
+// Idempotent — calling twice is a no-op.
+func watcherAddRoot(root string) {
+	if watcher == nil || root == "" {
+		return
+	}
+	watchedRootMu.Lock()
+	if watchedRoots[root] {
+		watchedRootMu.Unlock()
+		return
+	}
+	watchedRoots[root] = true
+	watchedRootMu.Unlock()
+
+	go addRecursive(root)
+}
+
+// watcherRemoveRoot stops watching a drive root and all its descendants.
+// No-op if the root was never watched (avoids slow filesystem walk).
+func watcherRemoveRoot(root string) {
+	if watcher == nil || root == "" {
+		return
+	}
+	watchedRootMu.Lock()
+	wasWatched := watchedRoots[root]
+	delete(watchedRoots, root)
+	watchedRootMu.Unlock()
+	if !wasWatched {
+		return
+	}
+
+	// Walk to remove every subscribed sub-directory.
+	go filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			// Skip hidden dirs and system dirs
-			if strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules" || d.Name() == "venv" {
+			watcher.Remove(p)
+		}
+		return nil
+	})
+}
+
+func addRecursive(root string) {
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "node_modules" ||
+				name == "venv" || name == "__pycache__" || name == ".git" {
 				return filepath.SkipDir
 			}
 			watcher.Add(p)
 		}
 		return nil
 	})
-	if err != nil {
-		log.Printf("Watcher: Failed to add path %s: %v", path, err)
+}
+
+func watcherLoop() {
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			handleWatcherEvent(event)
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[Watcher] error: %v", err)
+		}
 	}
 }
 
+func pathOnSelectedDrive(p string) bool {
+	return findFolderRoot(p) != ""
+}
+
+func findFolderRoot(p string) string {
+	watchedRootMu.Lock()
+	defer watchedRootMu.Unlock()
+	best := ""
+	for root := range watchedRoots {
+		if strings.HasPrefix(p, root+string(os.PathSeparator)) || p == root {
+			if len(root) > len(best) {
+				best = root
+			}
+		}
+	}
+	return best
+}
+
+// findEmbForSidecar returns the .emb path that pairs with a given image
+// sidecar (same dir, same base name), or "" if none exists.
+func findEmbForSidecar(imgPath string) string {
+	dir := filepath.Dir(imgPath)
+	base := strings.TrimSuffix(filepath.Base(imgPath), filepath.Ext(imgPath))
+	for _, ext := range []string{".emb", ".EMB"} {
+		cand := filepath.Join(dir, base+ext)
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	return ""
+}
+
 func handleWatcherEvent(event fsnotify.Event) {
+	root := findFolderRoot(event.Name)
+	if root == "" {
+		return
+	}
+
+	// Mark folder as outdated if any file event occurs
+	db.Exec("UPDATE folders SET needs_rescan=1, status='Outdated' WHERE path=?", root)
+
+	// New directory? Subscribe recursively (covers nested copies / git clones).
+	if event.Has(fsnotify.Create) {
+		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+			go addRecursive(event.Name)
+			return
+		}
+	}
+
 	ext := strings.ToLower(filepath.Ext(event.Name))
-	if !isSupportedExt(ext) && !event.Has(fsnotify.Create) {
-		// If it's a directory creation, we might want to watch it
-		info, err := os.Stat(event.Name)
-		if err == nil && info.IsDir() && event.Has(fsnotify.Create) {
-			watcher.Add(event.Name)
+	isEmb := ext == ".emb"
+	isSidecar := ext == ".jpg" || ext == ".jpeg" || ext == ".png"
+
+	if !isEmb && !isSidecar {
+		return
+	}
+	if !pathOnSelectedDrive(event.Name) {
+		return
+	}
+
+	// Removal — purge the DB record (or the .emb owning a deleted sidecar).
+	if event.Has(fsnotify.Remove) {
+		if isEmb {
+			log.Printf("[Watcher] removed: %s", event.Name)
+			dbRemoveByPath(event.Name)
+			globalIndex.RemoveByPrefix(event.Name)
+			return
+		}
+		// Sidecar removed → re-index its .emb (sidecar vector goes away).
+		if emb := findEmbForSidecar(event.Name); emb != "" {
+			scheduleIndex(emb)
 		}
 		return
 	}
 
-	if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-		// File added or updated
-		log.Printf("Auto-Updating: %s", event.Name)
-		// Trigger a single-file index (StartIndexing handles one file too)
-		go indexSingleFile(event.Name)
-	}
-
-	if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
-		// File deleted or moved
-		log.Printf("Auto-Removing: %s", event.Name)
-		dbRemoveByPath(event.Name)
-	}
-}
-
-func indexSingleFile(path string) {
-	// Simple wrapper for indexing a single file
-	id := fileID(path)
-	
-	// Get preview and embedding
-	result, err := callEmbedFile(path)
-	if err != nil {
+	// Rename — might be a move. We don't delete immediately so processOneEmb
+	// can detect the move via content-hash when the new file is created.
+	if event.Has(fsnotify.Rename) {
+		if !isEmb {
+			// If a sidecar is renamed, treat as removal for its .emb
+			if emb := findEmbForSidecar(event.Name); emb != "" {
+				scheduleIndex(emb)
+			}
+		}
 		return
 	}
 
-	var png []byte
-	if strings.ToLower(filepath.Ext(path)) == ".emb" {
-		png = callEmbEnginePreview(path)
+	// Create / Write — debounce, then index.
+	if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
+		if isEmb {
+			scheduleIndex(event.Name)
+			return
+		}
+		// Sidecar add/change → refresh the matching .emb.
+		if emb := findEmbForSidecar(event.Name); emb != "" {
+			scheduleIndex(emb)
+		}
 	}
-	if png == nil && result.PreviewB64 != "" {
-		png, _ = base64.StdEncoding.DecodeString(result.PreviewB64)
-	}
+}
 
-	info, _ := os.Stat(path)
-	sizeKB := 0.0
-	if info != nil {
-		sizeKB = float64(info.Size()) / 1024
+// scheduleIndex coalesces rapid events on `path` into a single deferred
+// re-index that fires `debounceWindow` after the LAST event.
+func scheduleIndex(path string) {
+	debounceMu.Lock()
+	if t, ok := debounce[path]; ok {
+		t.Stop()
 	}
+	debounce[path] = time.AfterFunc(debounceWindow, func() {
+		debounceMu.Lock()
+		delete(debounce, path)
+		debounceMu.Unlock()
+		runWatcherIndex(path)
+	})
+	debounceMu.Unlock()
+}
 
-	e := Entry{
-		ID:         id,
-		FilePath:   path,
-		FileName:   filepath.Base(path),
-		Format:     strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
-		SizeKB:     sizeKB,
-		HasPreview: png != nil,
+// runWatcherIndex re-indexes a single .emb file, going through the same
+// pipeline used by full scans (cache → hash → render → embed → sidecar).
+func runWatcherIndex(path string) {
+	if _, err := os.Stat(path); err != nil {
+		// File vanished between debounce and run — treat as removal.
+		dbRemoveByPath(path)
+		globalIndex.RemoveByPrefix(path)
+		return
 	}
-	if err := dbUpsert(e, png, result.Embedding); err == nil {
-		e.Vector = result.Embedding
-		globalIndex.Add(e)
+	// Force=true so a Write to an existing file actually re-embeds.
+	status := processOneEmb(path, "", true)
+	if status == "indexed" || status == "moved" {
+		log.Printf("[Watcher] auto-updated: %s (%s)", filepath.Base(path), status)
+		RefreshIdxStateCounts()
 	}
 }

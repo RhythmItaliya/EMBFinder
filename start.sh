@@ -44,6 +44,9 @@ EMBEDDER_PORT="${EMBEDDER_PORT:-8766}"
 EMB_ENGINE_PORT="${EMB_ENGINE_PORT:-8767}"
 HOST="${HOST:-127.0.0.1}"
 MODE="${MODE:-development}"
+export EMBFIND_EXTRA_DRIVES="/home/rhythm/Documents/test_data"
+# EMBFIND_DATA_DIR: dedicated folder for the database (embfinder.db)
+export EMBFIND_DATA_DIR="${ROOT}/db_storage"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 ARG="${1:-}"
@@ -309,11 +312,13 @@ if [[ "$MODE" == "production" ]]; then
     >> "$LOG_DIR/go-server.log" 2>&1 &
   GO_PID=$!
 else
-  info "Starting go-server (development, Wails window)…"
+  info "Starting go-server (development)…"
   (
     cd "$GO_SERVER_DIR"
     export MODE HEADLESS="${HEADLESS:-0}"
-    exec go run --tags dev . \
+    TAGS="dev"
+    if [[ "$HEADLESS" == "1" ]]; then TAGS="headless"; fi
+    exec go run --tags "$TAGS" . \
       >> "$LOG_DIR/go-server.log" 2>&1
   ) &
   GO_PID=$!

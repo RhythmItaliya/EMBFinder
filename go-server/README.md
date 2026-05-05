@@ -148,15 +148,31 @@ CREATE TABLE designs (
 
 ---
 
-## Dependencies
+## Folder-Based Management
 
-```bash
-go mod tidy   # resolve and tidy all dependencies
-```
+EMBFinder now utilizes an **autonomous discovery** system:
 
-| Package | Purpose |
-|---------|---------|
-| `modernc.org/sqlite` | Pure-Go SQLite (no CGO) |
-| `github.com/wailsapp/wails/v2` | Native desktop window |
-| `github.com/joho/godotenv` | `.env` file loading |
-| `github.com/fsnotify/fsnotify` | Cross-platform file watching |
+1. **Global Scouting**: The system automatically scans all detected drives (and `EMBFIND_EXTRA_DRIVES`) in the background every 30 minutes.
+2. **Real-time Population**: Found folders appear in the UI immediately. During discovery, they show a "Scouting..." status with real-time design counts.
+3. **Selective Indexing**: Users can trigger a deep-index (AI vectorisation) for specific folders via the "Scan Folder" button.
+4. **Rescan Logic**: If the system detects new files in a folder after the last scan, the folder is marked as "Outdated" and can be refreshed.
+
+---
+
+## Technical Stack
+
+| Category | Technology |
+|----------|------------|
+| Backend | Go 1.22 + SQLite (WAL mode) |
+| Search | CLIP (ViT-L-14) Dual-Vector Strategy |
+| Frontend | Vanilla HTML5 + CSS3 + JS (SSE Streaming) |
+| Imaging | PIL (Python) + Embroidermodder Rendering |
+| Persistence | Pure-Go SQLite (ModernC) |
+
+---
+
+## Performance Notes
+
+- **Search Latency**: ~50ms for 100k designs (sharded parallel scan).
+- **Discovery**: Non-blocking background goroutine; uses `filepath.WalkDir` for fast metadata-only traversal.
+- **Memory**: Vectors are loaded into memory for O(1) access during search; approximately 3.2MB per 1k designs.
