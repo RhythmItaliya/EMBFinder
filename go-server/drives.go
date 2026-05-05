@@ -12,15 +12,33 @@ import (
 // autoLibPaths returns auto-detected embroidery/image library paths.
 // No user input required — loads from system drives.
 func autoLibPaths() []DriveEntry {
+	var entries []DriveEntry
 	switch runtime.GOOS {
 	case "linux":
-		return linuxDrives()
+		entries = linuxDrives()
 	case "darwin":
-		return macDrives()
+		entries = macDrives()
 	case "windows":
-		return windowsDrives()
+		entries = windowsDrives()
 	}
-	return nil
+	// EMBFIND_EXTRA_DRIVES=/path/a;/path/b appends test/dev drives.
+	if extra := os.Getenv("EMBFIND_EXTRA_DRIVES"); extra != "" {
+		seen := map[string]bool{}
+		for _, e := range entries {
+			seen[e.Path] = true
+		}
+		for _, p := range strings.Split(extra, ";") {
+			p = strings.TrimSpace(p)
+			if p == "" || seen[p] {
+				continue
+			}
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				entries = append(entries, DriveEntry{Path: p, Label: "Test (" + filepath.Base(p) + ")"})
+				seen[p] = true
+			}
+		}
+	}
+	return entries
 }
 
 // DriveEntry describes one auto-detected drive or mount.
