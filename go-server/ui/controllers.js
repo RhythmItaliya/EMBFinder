@@ -19,6 +19,20 @@ const Toast = (() => {
   return { show };
 })();
 
+// ── Shared Utilities ──────────────────────────────────────────────────────────
+const Utils = {
+  // Extract a human-readable folder label from a file path
+  folderLabel: (path) => {
+    if (!path) return '';
+    const parts = path.split('/');
+    if (parts.length < 3) return '';
+    const p2 = parts[parts.length - 3] || '';
+    const p1 = parts[parts.length - 2] || '';
+    if (!p1) return '';
+    return p2 && p2 !== p1 ? `${p2} › ${p1}` : p1;
+  }
+};
+
 // ── SyncController ────────────────────────────────────────────────────────────
 const SyncController = (() => {
   let _es      = null;
@@ -31,7 +45,7 @@ const SyncController = (() => {
 
     _es.onopen = () => {
       $('dot').className        = 'dot dot--ok';
-      $('statusTxt').textContent = `Online — ${_indexed.toLocaleString()} designs`;
+      $('statusTxt').textContent = `Online`;
     };
 
     _es.onmessage = e => {
@@ -39,11 +53,22 @@ const SyncController = (() => {
       _indexed = d.total_indexed || 0;
       _paused  = !!d.user_paused;
       $('dot').className        = 'dot dot--ok';
-      $('statusTxt').textContent = `Online — ${_indexed.toLocaleString()} designs`;
+      $('statusTxt').textContent = `Online`;
       _renderSyncBtn();
       if (d.counts) _renderCounts(d.counts);
-      const running = d.running || (d.status && d.status !== 'Idle' && d.status !== 'idle');
-      running ? _showProgress(d) : $('progressWrap').classList.add('hidden');
+      
+      const status = (d.status || '').toLowerCase();
+      const running = d.running || (status && status !== 'idle' && status !== 'done' && !status.includes('awaiting app window'));
+      
+      if (running) {
+        _showProgress(d);
+      } else {
+        $('progressWrap').classList.add('hidden');
+      }
+      
+      // Refresh folder list if on that tab or if a scan just finished
+      if (typeof FolderController !== 'undefined') FolderController.refresh();
+      
       document.dispatchEvent(new CustomEvent('emb:indexed', { detail: { count: _indexed } }));
     };
 
@@ -96,12 +121,16 @@ const SyncController = (() => {
 
   function _showProgress(d) {
     $('progressWrap').classList.remove('hidden');
-    const proc  = d.processed || 0;
-    const total = d.total || d.discovered || 0;
-    const pct   = total > 0 ? Math.min(100, proc / total * 100).toFixed(1) : '0.0';
+    const proc = d.processed || 0;
+    const total = d.total || 0;
+    const pct = total > 0 ? Math.min(100, (proc / total) * 100).toFixed(1) : '0';
+    
+    $('progFill').style.width = `${pct}%`;
+    $('progCount').textContent = `${proc.toLocaleString()} / ${total.toLocaleString()} files`;
     $('progLabel').textContent = d.status || 'Syncing…';
-    $('progFill').style.width  = pct + '%';
-    $('progCount').textContent = pct + '%';
+    
+    // Update global stats in header
+    if (d.global_indexed !== undefined) $('globalIndexed').textContent = d.global_indexed.toLocaleString();
   }
 
   function _renderCounts(counts) {
@@ -138,41 +167,22 @@ const DriveController = (() => {
       list.innerHTML = '<div class="txt-sm txt-muted">No drives found</div>';
       return;
     }
-    list.innerHTML = drives.map(dr => {
-      const ok    = dr.usable;
-      const count = dr.indexed || 0;
-      const badge = count > 0 ? `<span class="drive-badge">${count.toLocaleString()}</span>` : '';
-      const cls   = ok ? 'drive-item' : 'drive-item drive-item--disabled';
-      const label = dr.label || dr.path;
-      return `<label class="${cls}">
-        <input type="checkbox" class="drive-check" data-path="${dr.path}"
-               ${dr.selected ? 'checked' : ''} ${ok ? '' : 'disabled'}>
-        <span class="drive-label" title="${dr.path}">${label}</span>
-        ${badge}
-      </label>`;
-    }).join('');
-
-    list.querySelectorAll('.drive-check').forEach(cb =>
-      cb.addEventListener('change', _onToggle)
-    );
+    list.innerHTML = drives.map(d => `
+      <div class="drive-item">
+        <div class="drive-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 12A10 10 0 1 1 12 2a10 10 0 0 1 10 10Z"/><path d="M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+          </svg>
+        </div>
+        <div class="drive-info">
+          <div class="drive-label" title="${d.path}">${d.label || d.path}</div>
+          <div class="drive-path">${d.path}</div>
+        </div>
+        ${d.indexed ? `<div class="drive-badge">${d.indexed.toLocaleString()}</div>` : ''}
+      </div>
+    `).join('');
   }
 
-  async function _onToggle(e) {
-    const checked = e.target.checked;
-    const path    = e.target.dataset.path;
-    const msg     = checked ? `Add "${path}" and start indexing?` : `Remove "${path}" from the index?`;
-    if (!confirm(msg)) { e.target.checked = !checked; return; }
-    const selected = [...document.querySelectorAll('.drive-check:checked')].map(c => c.dataset.path);
-    try {
-      await API.postJSON('/api/drives/select', { paths: selected });
-      if (checked) {
-        const r = await API.get('/api/index/start');
-        if (r.status === 'started') { Toast.show('Scan started'); SyncController.start(); }
-      } else {
-        Toast.show('Removed from index');
-      }
-    } catch { Toast.show('Could not update drive selection', 'err'); }
-  }
 
   return { reload };
 })();
@@ -382,20 +392,117 @@ const SearchController = (() => {
 
   function _showEmpty() { $('searchEmptyState').style.display = ''; }
 
-  // Extract a human-readable folder label from a file path
-  // e.g. /media/rhythm/Millie/SHIVAM/BLUEDARK-17/ALLOVER-13/s(1).EMB -> BLUEDARK-17 › ALLOVER-13
-  function _folderLabel(path) {
-    if (!path) return '';
-    const parts = path.split('/');
-    if (parts.length < 3) return '';
-    // last two parent folders before the filename
-    const p2 = parts[parts.length - 3] || '';
-    const p1 = parts[parts.length - 2] || '';
-    if (!p1) return '';
-    return p2 && p2 !== p1 ? `${p2} › ${p1}` : p1;
-  }
+  function _folderLabel(path) { return Utils.folderLabel(path); }
 
   return { run, clear };
+})();
+
+// ── FolderController ─────────────────────────────────────────────────────────
+const FolderController = (() => {
+  let _folders = [];
+
+  function init() {
+    refresh();
+    setInterval(refresh, 5000); // Periodic refresh
+  }
+
+  async function refresh() {
+    const grid = $('folderGrid');
+    if (grid && !grid.children.length) {
+      grid.innerHTML = '<div class="loading-placeholder" style="grid-column: 1/-1; padding: 100px 0;"><div class="pulse-circle"></div><div>Discovering embroidery folders…</div></div>';
+    }
+    try {
+      _folders = await API.get('/api/folders') || [];
+      _render();
+    } catch (e) {
+      console.error('Folder refresh failed:', e);
+    }
+  }
+
+  function _render() {
+    // Update Folder Summary
+    const totalFolders = _folders.length;
+    const indexedFolders = _folders.filter(f => f.status === 'Indexed' || f.indexed_files > 0).length;
+    
+    const totalEl = $('folderTotalCount');
+    const indexedEl = $('folderIndexedCount');
+    if (totalEl) totalEl.innerHTML = `<b>${totalFolders}</b> folders discovered`;
+    if (indexedEl) indexedEl.innerHTML = `<b>${indexedFolders}</b> indexed`;
+    
+    const grid = $('folderGrid');
+    if (!grid) return;
+    
+    if (!_folders.length) {
+      grid.innerHTML = '<div class="grid-empty"><div class="empty-title">No collections added.</div><div class="empty-sub">Click "Add Folder" to index your embroidery files.</div></div>';
+      return;
+    }
+
+    grid.innerHTML = '';
+    _folders.forEach(f => {
+      const card = document.createElement('div');
+      card.className = 'folder-card';
+      
+      const isOutdated = f.needs_rescan || (f.indexed_files < f.total_files && f.status !== 'In Progress');
+      const isScanning = f.status === 'In Progress';
+      
+      let lineCls = 'status-line--ok';
+      if (isScanning) lineCls = 'status-line--scanning';
+      else if (isOutdated) lineCls = 'status-line--outdated';
+
+      card.innerHTML = `
+        <div class="folder-card__body">
+          <span class="folder-card__name">${f.name}</span>
+          <span class="folder-card__path">${f.path}</span>
+          
+          <div class="folder-card__stats">
+            <div class="folder-card__stat">
+              <span class="val">${f.total_files.toLocaleString()}</span>
+              <span class="key">Total EMB</span>
+            </div>
+            <div class="folder-card__stat">
+              <span class="val">${f.indexed_files.toLocaleString()}</span>
+              <span class="key">Indexed</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="folder-card__actions">
+          <button class="btn btn--primary btn--sm" onclick="FolderController.rescan('${f.path}')" ${isScanning ? 'disabled' : ''}>
+            ${isScanning ? 'Scanning...' : 'Scan Folder'}
+          </button>
+          <button class="btn btn--outline btn--sm" onclick="FolderController.open('${f.path}')">Explore</button>
+        </div>
+        
+        <div class="status-line ${lineCls}"></div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  async function addFolder() {
+    const path = prompt("Enter folder path to add:");
+    if (!path) return;
+    
+    Toast.show("Adding folder...");
+    try {
+      await API.post('/api/folders/rescan', { path }); 
+      refresh();
+    } catch (e) {
+      Toast.show("Failed to add folder", "err");
+    }
+  }
+
+  async function rescan(path) {
+    Toast.show("Rescan queued for " + path);
+    await API.post('/api/folders/rescan', { path });
+    refresh();
+  }
+
+  function open(path) {
+    API.post('/api/open-file', { path });
+  }
+
+  return { init, refresh, rescan, open, addFolder };
 })();
 
 // ── LibraryController ─────────────────────────────────────────────────────────
@@ -405,7 +512,7 @@ const LibraryController = (() => {
   async function load(page = 1, filter = '') {
     _page = page; _filter = filter;
     const grid = $('libGrid');
-    grid.innerHTML = '<div class="grid-empty txt-muted" style="padding:60px 0">Loading…</div>';
+    grid.innerHTML = '<div class="loading-placeholder" style="padding: 100px 0;"><div class="pulse-circle"></div><div>Loading library…</div></div>';
     $('libPagination').innerHTML = '';
 
     try {
@@ -430,7 +537,7 @@ const LibraryController = (() => {
       d.items.forEach(item => {
         const card = document.createElement('div');
         card.className = 'card';
-        const folder = _folderLabel(item.file_path);
+        const folder = Utils.folderLabel(item.file_path);
         card.innerHTML = `
           <div class="card__render">
             ${item.has_preview
@@ -652,9 +759,20 @@ const TabController = (() => {
   function switchTo(tab) {
     $('panelSearch').classList.toggle('hidden',  tab !== 'search');
     $('panelLibrary').classList.toggle('hidden', tab !== 'library');
+    $('panelFolders').classList.toggle('hidden', tab !== 'folders');
+    
     $('tabSearch').classList.toggle('tab-btn--active',  tab === 'search');
     $('tabLibrary').classList.toggle('tab-btn--active', tab === 'library');
+    $('tabFolders').classList.toggle('tab-btn--active', tab === 'folders');
+    
     if (tab === 'library') LibraryController.load(1, LibraryController.getFilter());
+    if (tab === 'folders') FolderController.refresh();
   }
-  return { switchTo };
+  function current() {
+    if (!$('panelSearch').classList.contains('hidden')) return 'search';
+    if (!$('panelLibrary').classList.contains('hidden')) return 'library';
+    if (!$('panelFolders').classList.contains('hidden')) return 'folders';
+    return '';
+  }
+  return { switchTo, current };
 })();

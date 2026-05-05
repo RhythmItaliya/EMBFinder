@@ -18,6 +18,10 @@
   // ── Header buttons ────────────────────────────────────────────────────────
   document.getElementById('tabSearch') .addEventListener('click', () => TabController.switchTo('search'));
   document.getElementById('tabLibrary').addEventListener('click', () => TabController.switchTo('library'));
+  document.getElementById('tabFolders').addEventListener('click', () => {
+    TabController.switchTo('folders');
+    FolderController.refresh();
+  });
 
   document.getElementById('refreshBtn').addEventListener('click', () => {
     DriveController.reload();
@@ -83,4 +87,5 @@
   // ── Start ─────────────────────────────────────────────────────────────────
   DriveController.reload();
   SyncController.start();
+  FolderController.init();
 })();
