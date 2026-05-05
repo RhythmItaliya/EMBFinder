@@ -49,8 +49,16 @@ func main() {
 		fmt.Fprintf(w, "window.APP_MODE  = '%s';\n", Config.Mode)
 	})
 
-	uiFS, _ := fs.Sub(uiFiles, "ui")
-	mux.Handle("/", http.FileServer(http.FS(uiFS)))
+	var uiFS http.FileSystem
+	if Config.Mode == "development" {
+		uiFS = http.Dir("ui")
+		log.Printf("[HTTP] Serving UI from filesystem (development mode)")
+	} else {
+		sub, _ := fs.Sub(uiFiles, "ui")
+		uiFS = http.FS(sub)
+		log.Printf("[HTTP] Serving UI from embedded files (production mode)")
+	}
+	mux.Handle("/", http.FileServer(uiFS))
 
 	// Auto-open browser on non-headless runs
 	url := fmt.Sprintf("http://%s:%s", Config.Host, Config.Port)

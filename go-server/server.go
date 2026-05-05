@@ -6,6 +6,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 )
 
 // version and buildDate are injected at build time via ldflags:
@@ -59,6 +60,14 @@ func startCore() {
 	// ── Autonomous background indexing loop ───────────────────────────────────
 	go AutoIndexAllDrives()
 	log.Printf("[Sync] Autonomous indexing goroutine started")
+
+	// ── Periodic stats refresh ────────────────────────────────────────────────
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			RefreshIdxStateCounts()
+		}
+	}()
 }
 
 // buildMux registers all /api/* routes and returns the mux.
@@ -66,19 +75,19 @@ func startCore() {
 func buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/drives",             hDriveList)
-	mux.HandleFunc("/api/drives/select",      hDriveSelect)
 	mux.HandleFunc("/api/search",             hSearch)
 	mux.HandleFunc("/api/preview/",           hPreview)
 	mux.HandleFunc("/api/thumbnail/",         hThumbnail)
 	mux.HandleFunc("/api/index/state/stream", hIndexStateStream)
 	mux.HandleFunc("/api/index/toggle",       hToggleSync)
-	mux.HandleFunc("/api/index/start",        hIndexStart)
 	mux.HandleFunc("/api/clear",              hClear)
 	mux.HandleFunc("/api/latest",             hLatest)
 	mux.HandleFunc("/api/browse",             hBrowseEMB)
 	mux.HandleFunc("/api/open-file",          hOpenFile)
 	mux.HandleFunc("/api/emb-info",           hEmbInfo)
 	mux.HandleFunc("/api/open-truesizer",     hOpenTrueSizer)
+	mux.HandleFunc("/api/folders",            hFolderList)
+	mux.HandleFunc("/api/folders/rescan",     hFolderRescan)
 	return mux
 }
 

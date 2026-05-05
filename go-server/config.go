@@ -55,29 +55,37 @@ func initConfig() {
 	mode := strings.ToLower(getEnv("MODE", "development"))
 
 	// ── 3. Database path ─────────────────────────────────────────────────────
-	// In production, use the platform's standard config directory so the DB
-	// survives binary updates without the user having to move files.
-	//   Linux:   ~/.config/EMBFinder/embfinder.db
-	//   macOS:   ~/Library/Application Support/EMBFinder/embfinder.db
-	//   Windows: %APPDATA%\EMBFinder\embfinder.db
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		if mode == "production" {
-			configDir, err := os.UserConfigDir()
-			if err != nil {
-				log.Fatalf("Cannot locate config directory: %v", err)
+	// Users can specify a dedicated directory for all EMBFinder data files
+	// using the EMBFIND_DATA_DIR env var.
+	dataDir := os.Getenv("EMBFIND_DATA_DIR")
+	dbPath := ""
+
+	if dataDir != "" {
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			log.Fatalf("Cannot create data directory %s: %v", dataDir, err)
+		}
+		dbPath = filepath.Join(dataDir, "embfinder.db")
+	} else {
+		// Fallback to legacy DB_PATH or defaults
+		dbPath = os.Getenv("DB_PATH")
+		if dbPath == "" {
+			if mode == "production" {
+				configDir, err := os.UserConfigDir()
+				if err != nil {
+					log.Fatalf("Cannot locate config directory: %v", err)
+				}
+				appDir := filepath.Join(configDir, "EMBFinder")
+				if err := os.MkdirAll(appDir, 0o755); err != nil {
+					log.Fatalf("Cannot create config directory %s: %v", appDir, err)
+				}
+				dbPath = filepath.Join(appDir, "embfinder.db")
+			} else {
+				// Development: store alongside the binary in ./data/
+				if err := os.MkdirAll("data", 0o755); err != nil {
+					log.Fatalf("Cannot create data directory: %v", err)
+				}
+				dbPath = filepath.Join("data", "embfinder.db")
 			}
-			appDir := filepath.Join(configDir, "EMBFinder")
-			if err := os.MkdirAll(appDir, 0o755); err != nil {
-				log.Fatalf("Cannot create config directory %s: %v", appDir, err)
-			}
-			dbPath = filepath.Join(appDir, "embfinder.db")
-		} else {
-			// Development: store alongside the binary in ./data/
-			if err := os.MkdirAll("data", 0o755); err != nil {
-				log.Fatalf("Cannot create data directory: %v", err)
-			}
-			dbPath = filepath.Join("data", "embfinder.db")
 		}
 	}
 
