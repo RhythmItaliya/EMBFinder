@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EMBFinder — Embroidery Visual Search</title>
   <meta name="description" content="Local-first AI visual search for Wilcom EMB embroidery files.">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
@@ -24,7 +24,11 @@
       </svg>
       <span class="header__logo">EMBFind<em>er</em></span>
       <div class="dot" id="dot"></div>
-      <span class="status-txt" id="statusTxt">Connecting…</span>
+      <div class="header__stats" id="globalStats">
+        <span class="status-txt" id="statusTxt">Connecting…</span>
+        <span class="sep">|</span>
+        <span class="stats-item"><strong id="globalIndexed">0</strong> designs indexed</span>
+      </div>
     </div>
 
     <nav class="tab-nav">
@@ -35,6 +39,10 @@
       <button class="tab-btn" id="tabLibrary">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         EMB Library
+      </button>
+      <button class="tab-btn" id="tabFolders">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Indexed Folders
       </button>
     </nav>
 
@@ -53,26 +61,30 @@
 
       <section>
         <div class="section-label">Drives &amp; Volumes</div>
-        <div class="section-label-sub">Select drives to scan</div>
-        <div class="drive-list" id="driveList">
-          <div class="txt-sm txt-muted">Detecting drives…</div>
+        <div id="driveList" class="drive-list">
+          <div class="loading-placeholder">
+            <div class="pulse-circle"></div>
+            <div class="txt-11">Detecting drives…</div>
+          </div>
         </div>
       </section>
 
-      <div id="progressWrap" class="hidden">
+      <section id="progressWrap" class="hidden">
+        <div class="section-label">Indexing Progress</div>
         <div class="progress">
           <div class="progress__meta">
             <span id="progLabel">Syncing…</span>
-            <span id="progCount" class="txt-mono">0%</span>
+            <span id="progCount" class="txt-mono">0 / 0 files</span>
           </div>
           <div class="progress__track"><div class="progress__fill" id="progFill"></div></div>
         </div>
-      </div>
+      </section>
 
-      <section>
-        <div class="section-label">Library Stats</div>
         <div id="formatCounts" class="stats-wrap">
-          <span class="txt-sm txt-muted">Waiting for sync…</span>
+          <div class="loading-placeholder">
+            <div class="pulse-circle"></div>
+            <div class="txt-11">Waiting for sync…</div>
+          </div>
         </div>
       </section>
 
@@ -165,6 +177,27 @@
     <div class="grid-wrap">
       <div class="grid" id="libGrid"></div>
       <div class="lib-pagination" id="libPagination"></div>
+    </div>
+  </main>
+
+  <!-- ════════ FOLDERS TAB ════════════════════════════════════════════════ -->
+  <main class="main hidden" id="panelFolders">
+    <div class="folders-header">
+      <div class="header-main">
+      <div class="header-main__title">
+        <h1>Folder Management</h1>
+        <p class="txt-muted">Manage independent embroidery collections. AI search only searches indexed folders.</p>
+      </div>
+      <div id="folderSummary" class="folder-summary">
+        <span id="folderTotalCount">0 folders discovered</span>
+        <span class="dot">·</span>
+        <span id="folderIndexedCount">0 indexed</span>
+      </div>
+    </div>
+    </div>
+    
+    <div class="folder-grid" id="folderGrid">
+      <!-- populated by js -->
     </div>
   </main>
 
