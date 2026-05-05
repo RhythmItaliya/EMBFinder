@@ -29,7 +29,7 @@ func initDB(path string) error {
 	db.Exec("PRAGMA synchronous=NORMAL")
 	db.Exec("PRAGMA busy_timeout=5000") // Wait up to 5s if DB locked
 	db.Exec("PRAGMA cache_size=-32000") // 32MB cache
-	db.SetMaxOpenConns(10)               // Allow concurrent reads
+	db.SetMaxOpenConns(10)              // Allow concurrent reads
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(time.Hour)
 	db.Exec("PRAGMA mmap_size=268435456")
@@ -50,8 +50,30 @@ func initDB(path string) error {
 	// Migrations for existing DBs
 	db.Exec("ALTER TABLE designs ADD COLUMN thumbnail BLOB")
 	db.Exec("ALTER TABLE designs ADD COLUMN sidecar_embedding BLOB")
+	db.Exec("ALTER TABLE folders ADD COLUMN needs_rescan INTEGER DEFAULT 0")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_path ON designs(file_path)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_mtime ON designs(file_path, file_mtime, size_kb)")
+
+	// Per-folder tracking: records independent progress and status for each selected root.
+	db.Exec(`CREATE TABLE IF NOT EXISTS folders (
+		path           TEXT PRIMARY KEY,
+		name           TEXT NOT NULL,
+		total_files    INTEGER DEFAULT 0,
+		indexed_files  INTEGER DEFAULT 0,
+		last_file      TEXT,
+		status         TEXT DEFAULT 'Pending',
+		needs_rescan   INTEGER DEFAULT 0,
+		last_scan      INTEGER DEFAULT 0,
+		updated_at     INTEGER DEFAULT (strftime('%s','now'))
+	)`)
+
+	// Legacy support / checkpoint data
+	db.Exec(`CREATE TABLE IF NOT EXISTS scan_progress (
+		drive_path     TEXT PRIMARY KEY,
+		last_file      TEXT,
+		processed      INTEGER DEFAULT 0,
+		updated_at     INTEGER DEFAULT (strftime('%s','now'))
+	)`)
 	return err
 }
 
@@ -187,6 +209,12 @@ func dbCount() int {
 	return n
 }
 
+func dbCountForPath(path string) int {
+	var n int
+	db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path LIKE ?", path+"%").Scan(&n)
+	return n
+}
+
 func dbClear() int {
 	n := dbCount()
 	db.Exec("DELETE FROM designs")
@@ -209,6 +237,8 @@ func dbUpdateFileMetadata(id string, newPath string, newName string, mtime int64
 func dbClearAll() error {
 	writeMu.Lock()
 	defer writeMu.Unlock()
+	db.Exec("DELETE FROM folders")
+	db.Exec("DELETE FROM scan_progress")
 	_, err := db.Exec("DELETE FROM designs")
 	return err
 }
@@ -228,4 +258,101 @@ func dbGetFormatCounts() map[string]int {
 		}
 	}
 	return res
+}
+
+// dbSaveProgress upserts a per-drive checkpoint. lastFile may be empty
+// (final flush); processed is monotonic across runs (additive when called
+// repeatedly within the same run, since the indexer only counts files it
+// actually attempted in this run).
+func dbSaveProgress(drive, lastFile string, processed int) {
+	if drive == "" {
+		return
+	}
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec(`INSERT INTO scan_progress(drive_path, last_file, processed, updated_at)
+	         VALUES(?,?,?,strftime('%s','now'))
+	         ON CONFLICT(drive_path) DO UPDATE SET
+	           last_file=excluded.last_file,
+	           processed=excluded.processed,
+	           updated_at=excluded.updated_at`,
+		drive, lastFile, processed)
+}
+
+// dbLoadProgress returns the last checkpoint for `drive`, if one exists.
+func dbLoadProgress(drive string) (lastFile string, processed int, ok bool) {
+	err := db.QueryRow(
+		"SELECT last_file, processed FROM scan_progress WHERE drive_path=?", drive,
+	).Scan(&lastFile, &processed)
+	return lastFile, processed, err == nil
+}
+
+// dbClearProgress wipes the checkpoint for one drive (used when the user
+// unselects it or clears the index).
+func dbClearProgress(drive string) {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec("DELETE FROM scan_progress WHERE drive_path=?", drive)
+	db.Exec("DELETE FROM folders WHERE path=?", drive)
+}
+
+type FolderStats struct {
+	Path         string `json:"path"`
+	Name         string `json:"name"`
+	TotalFiles   int    `json:"total_files"`
+	IndexedFiles int    `json:"indexed_files"`
+	LastFile     string `json:"last_file"`
+	Status       string `json:"status"`
+	NeedsRescan  bool   `json:"needs_rescan"`
+	LastScan     int64  `json:"last_scan"`
+}
+
+func dbSaveFolder(s FolderStats) {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	
+	// If total_files is 0, try to preserve existing value
+	if s.TotalFiles == 0 {
+		db.QueryRow("SELECT total_files FROM folders WHERE path=?", s.Path).Scan(&s.TotalFiles)
+	}
+
+	db.Exec(`INSERT INTO folders(path, name, total_files, indexed_files, last_file, status, needs_rescan, last_scan, updated_at)
+	         VALUES(?,?,?,?,?,?,?,?,strftime('%s','now'))
+	         ON CONFLICT(path) DO UPDATE SET
+	           name=excluded.name,
+	           total_files=excluded.total_files,
+	           indexed_files=excluded.indexed_files,
+	           last_file=excluded.last_file,
+	           status=excluded.status,
+	           needs_rescan=excluded.needs_rescan,
+	           last_scan=excluded.last_scan,
+	           updated_at=excluded.updated_at`,
+		s.Path, s.Name, s.TotalFiles, s.IndexedFiles, s.LastFile, s.Status, s.NeedsRescan, s.LastScan)
+}
+
+func dbGetTotalForFolder(path string) int32 {
+	var n int32
+	db.QueryRow("SELECT total_files FROM folders WHERE path=?", path).Scan(&n)
+	return n
+}
+
+func dbLoadFolders() ([]FolderStats, error) {
+	rows, err := db.Query("SELECT path, name, total_files, indexed_files, last_file, status, needs_rescan, last_scan FROM folders")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FolderStats
+	for rows.Next() {
+		var s FolderStats
+		rows.Scan(&s.Path, &s.Name, &s.TotalFiles, &s.IndexedFiles, &s.LastFile, &s.Status, &s.NeedsRescan, &s.LastScan)
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func dbSetFolderStatus(path string, status string) {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec("UPDATE folders SET status=?, updated_at=strftime('%s','now') WHERE path=?", status, path)
 }

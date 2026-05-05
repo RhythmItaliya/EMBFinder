@@ -80,33 +80,28 @@ func hIndexStateStream(w http.ResponseWriter, r *http.Request) {
 
 // ── DELETE /api/index (also accepts GET for browser compat) ──────────────────────
 // hClear atomically stops indexing, wipes the DB, then resets all counters.
-// Algorithm:
-//   1. Acquire state lock, set Running=false, Status="Clearing", reset counters.
-//   2. Sleep 150ms — gives the background indexer goroutine one iteration cycle
-//      to notice Running=false and return cleanly (prevents a race where the goroutine
-//      tries to dbUpsert into a just-truncated table).
-//   3. Truncate SQLite via a single DELETE (O(1) in WAL mode).
-//   4. Clear the in-memory index (O(N) slice nil).
-//   5. Re-read format counts from DB (now all zero) and broadcast via SSE.
 func hClear(w http.ResponseWriter, r *http.Request) {
 	// Step 1 — Signal the indexer to stop
 	idxState.mu.Lock()
 	idxState.Running    = false
-	idxState.UserPaused = true  // Keep paused so AutoIndex won’t restart immediately
+	idxState.UserPaused = true
 	idxState.Status     = "Clearing data..."
-	atomic.StoreInt32(&idxState.Progress,   0)
-	atomic.StoreInt32(&idxState.Discovered, 0)
-	atomic.StoreInt32(&idxState.Total,      0)
-	idxState.ScanDone = false
 	idxState.mu.Unlock()
 
-	// Step 2 — Let the indexer goroutine notice the stop flag
-	time.Sleep(200 * time.Millisecond)
+	// Step 2 — Wait for indexer to actually stop (max 2s)
+	for i := 0; i < 20; i++ {
+		idxState.mu.RLock()
+		running := idxState.Running
+		idxState.mu.RUnlock()
+		if !running {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	// Step 3 — Wipe database
 	if err := dbClearAll(); err != nil {
 		log.Printf("[DB] Failed to clear designs: %v", err)
-		// Un-pause so user can try again
 		idxState.mu.Lock()
 		idxState.UserPaused = false
 		idxState.Status     = "Idle"
@@ -114,6 +109,14 @@ func hClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database busy, try again", 500)
 		return
 	}
+	
+	// Reset counters AFTER wiping
+	atomic.StoreInt32(&idxState.Progress,   0)
+	atomic.StoreInt32(&idxState.Discovered, 0)
+	atomic.StoreInt32(&idxState.Total,      0)
+	idxState.mu.Lock()
+	idxState.ScanDone = false
+	idxState.mu.Unlock()
 
 	// Step 4 — Wipe memory index
 	globalIndex.Clear()
@@ -154,7 +157,68 @@ func hToggleSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"user_paused": paused})
 }
 
-// ── POST /api/search ──────────────────────────────────────────────────────────
+// hFolderList returns all indexed folders and their stats.
+func hFolderList(w http.ResponseWriter, r *http.Request) {
+	folders, err := dbLoadFolders()
+	if err != nil {
+		writeJSON(w, errJSON(err.Error()))
+		return
+	}
+	if folders == nil {
+		folders = []FolderStats{}
+	}
+	writeJSON(w, folders)
+}
+
+// hFolderRescan triggers an immediate rescan of a specific folder.
+func hFolderRescan(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, errJSON("invalid body"))
+		return
+	}
+	if body.Path == "" {
+		writeJSON(w, errJSON("path required"))
+		return
+	}
+	
+	// Force scan the path
+	go StartIndexingMulti([]string{body.Path}, true)
+	
+	writeJSON(w, map[string]string{"status": "queued", "path": body.Path})
+}
+
+// ── GET /api/drives ──────────────────────────────────────────────────────────
+// returns all detected drives/volumes with their EMB counts.
+func hDriveList(w http.ResponseWriter, r *http.Request) {
+	all := autoLibPaths()
+	
+	type driveInfo struct {
+		Path     string `json:"path"`
+		Label    string `json:"label"`
+		FSType   string `json:"fs_type,omitempty"`
+		Usable   bool   `json:"usable"`
+		Indexed  int    `json:"indexed"`
+	}
+
+	infos := make([]driveInfo, 0, len(all))
+	for _, d := range all {
+		var n int
+		// Count designs under this drive prefix
+		db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path LIKE ?", d.Path+"/%").Scan(&n)
+		
+		infos = append(infos, driveInfo{
+			Path:    d.Path,
+			Label:   d.Label,
+			FSType:  d.FSType,
+			Usable:  usableDrive(d),
+			Indexed: n,
+		})
+	}
+	writeJSON(w, map[string]interface{}{"drives": infos})
+}
 // Hot path — optimized for minimal latency:
 //  1. Read uploaded bytes directly
 //  2. If .emb file: route through emb-engine for a visual preview first
