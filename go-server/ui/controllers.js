@@ -67,7 +67,7 @@ const SyncController = (() => {
       if (d.counts) _renderCounts(d.counts);
       
       const status = (d.status || '').toLowerCase();
-      const running = d.running || (status && status !== 'idle' && status !== 'done' && !status.includes('awaiting app window'));
+      const running = d.running || (status && status !== 'idle' && status !== 'done' && !status.includes('awaiting app window') && !status.includes('stopped'));
       
       if (running) {
         _showProgress(d);
@@ -491,16 +491,37 @@ const FolderController = (() => {
     }
 
     grid.innerHTML = '';
-    _folders.forEach(f => {
+    const sorted = [..._folders].sort((a, b) => {
+      const aScanning = a.status === 'In Progress';
+      const bScanning = b.status === 'In Progress';
+      if (aScanning !== bScanning) return aScanning ? -1 : 1;
+
+      const aOutdated = a.needs_rescan || (a.indexed_files < a.total_files && a.status !== 'In Progress');
+      const bOutdated = b.needs_rescan || (b.indexed_files < b.total_files && b.status !== 'In Progress');
+      if (aOutdated !== bOutdated) return aOutdated ? -1 : 1;
+
+      const aCompleted = a.status === 'Completed';
+      const bCompleted = b.status === 'Completed';
+      if (aCompleted !== bCompleted) return aCompleted ? 1 : -1;
+
+      return a.name.localeCompare(b.name);
+    });
+
+    sorted.forEach(f => {
       const card = document.createElement('div');
       card.className = 'folder-card';
-      
-      const isOutdated = f.needs_rescan || (f.indexed_files < f.total_files && f.status !== 'In Progress');
-      const isScanning = f.status === 'In Progress';
-      
-      let lineCls = 'status-line--ok';
-      if (isScanning) lineCls = 'status-line--scanning';
-      else if (isOutdated) lineCls = 'status-line--outdated';
+
+      const isScanning  = f.status === 'In Progress';
+      // Treat as completed if DB says so OR if counts match (fallback before cleanup runs)
+      const isCompleted = f.status === 'Completed' ||
+                          (f.total_files > 0 && f.indexed_files >= f.total_files);
+      const isOutdated  = !isCompleted && !isScanning &&
+                          (f.needs_rescan || f.indexed_files < f.total_files);
+
+      let lineCls = 'status-line--pending'; // red = not yet started
+      if (isScanning)       lineCls = 'status-line--scanning'; // animated blue
+      else if (isCompleted) lineCls = 'status-line--ok';       // green
+      else if (isOutdated)  lineCls = 'status-line--outdated'; // amber
 
       card.innerHTML = `
         <div class="folder-card__body">
@@ -523,6 +544,9 @@ const FolderController = (() => {
           <button class="btn btn--primary btn--sm" onclick="FolderController.rescan('${f.path}')" ${isScanning ? 'disabled' : ''}>
             ${isScanning ? 'Scanning...' : 'Scan Folder'}
           </button>
+          ${isScanning
+            ? `<button class="btn btn--danger btn--sm" onclick="FolderController.stop('${f.path}')">Stop</button>`
+            : ''}
           <button class="btn btn--outline btn--sm" onclick="FolderController.open('${f.path}')">Explore</button>
         </div>
         
@@ -530,18 +554,20 @@ const FolderController = (() => {
       `;
       grid.appendChild(card);
     });
+
   }
 
   async function addFolder() {
-    const path = prompt("Enter folder path to add:");
-    if (!path) return;
-    
-    Toast.show("Adding folder...");
     try {
-      await API.postJSON('/api/folders/rescan', { path });
-      refresh();
+      const res = await API.get('/api/pick-folder');
+      if (res.status === 'ok' && res.path) {
+        Toast.show("Adding folder: " + res.path);
+        await API.postJSON('/api/folders/rescan', { path: res.path });
+        refresh();
+      }
     } catch (e) {
-      Toast.show("Failed to add folder", "err");
+      console.error('Pick folder failed:', e);
+      Toast.show("Failed to open folder picker", "err");
     }
   }
 
@@ -556,21 +582,36 @@ const FolderController = (() => {
     }
   }
 
-  async function scanAll() {
-    Toast.show('Queueing full scan...');
-    $('statusTxt').textContent = 'Starting scan...';
+  async function stop(path) {
+    Toast.show('Stopping scan for ' + path + '...');
     try {
-      const paths = (typeof DriveController !== 'undefined' && DriveController.getSelectedPaths)
-        ? DriveController.getSelectedPaths()
-        : [];
-      const payload = paths.length ? { paths, force: false } : { force: false };
-      const res = await API.postJSON('/api/index/start', payload);
-      if (res.status === 'no_paths') Toast.show(res.msg || 'No folders available', 'err');
-      else if (res.status === 'queued') Toast.show('Full scan queued');
-      else Toast.show('Full scan started');
+      await API.postJSON('/api/folders/stop', { path });
       refresh();
     } catch (e) {
-      Toast.show('Failed to start full scan', 'err');
+      Toast.show('Stop failed', 'err');
+    }
+  }
+
+  async function scanAll() {
+    // Only queue folders that are NOT already completed
+    const pending = _folders.filter(f =>
+      f.status !== 'Completed' && f.status !== 'In Progress'
+    );
+    if (pending.length === 0) {
+      Toast.show('All folders already fully indexed ✓', 'success');
+      return;
+    }
+    Toast.show(`Queueing ${pending.length} unscanned folder(s)…`);
+    $('statusTxt').textContent = 'Starting scan...';
+    try {
+      const paths = pending.map(f => f.path);
+      const res = await API.postJSON('/api/index/start', { paths, force: false });
+      if (res.status === 'no_paths') Toast.show(res.msg || 'No folders available', 'err');
+      else if (res.status === 'queued') Toast.show(`${paths.length} folder(s) queued`);
+      else Toast.show('Scan started');
+      refresh();
+    } catch (e) {
+      Toast.show('Failed to start scan', 'err');
     }
   }
 
@@ -578,7 +619,30 @@ const FolderController = (() => {
     API.postJSON('/api/open-file', { path });
   }
 
-  return { init, refresh, rescan, open, addFolder, scanAll };
+  return { init, refresh, rescan, stop, open, addFolder, scanAll };
+})();
+
+// ── PerfController ───────────────────────────────────────────────────────────
+const PerfController = (() => {
+  let _timer = null;
+
+  async function init() {
+    await refresh();
+    if (_timer) clearInterval(_timer);
+    _timer = setInterval(refresh, 8000);
+  }
+
+  async function refresh() {
+    try {
+      const d = await API.get('/api/perf');
+      const sel = document.getElementById('perfModeSelect');
+      if (sel && d.mode) sel.value = d.mode;
+    } catch {
+      // silent
+    }
+  }
+
+  return { init, refresh };
 })();
 
 // ── LibraryController ─────────────────────────────────────────────────────────

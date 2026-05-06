@@ -24,12 +24,47 @@
   });
   document.getElementById('addFolderBtn').addEventListener('click', () => FolderController.addFolder());
   document.getElementById('scanAllBtn').addEventListener('click', () => FolderController.scanAll());
+  const repairBtn = document.getElementById('repairDbBtn');
+  if (repairBtn) {
+    repairBtn.addEventListener('click', async () => {
+      repairBtn.disabled = true;
+      repairBtn.textContent = 'Backing up…';
+      try {
+        const bk = await API.postJSON('/api/db/backup', {});
+        if (bk.status !== 'ok') { Toast.show('Backup failed: ' + (bk.error || '?'), 'err'); return; }
+        Toast.show('Backup saved: ' + bk.backup_path);
+        repairBtn.textContent = 'Repairing…';
+        const rp = await API.postJSON('/api/db/repair', {});
+        Toast.show(`Repair done: removed ${rp.removed || 0} duplicates`, 'success');
+        FolderController.refresh();
+      } catch(e) {
+        Toast.show('Repair failed: ' + e.message, 'err');
+      } finally {
+        repairBtn.disabled = false;
+        repairBtn.textContent = '🛠 Repair DB';
+      }
+    });
+  }
+
 
   document.getElementById('refreshBtn').addEventListener('click', () => {
     DriveController.reload();
     if (TabController.current() === 'library') LibraryController.load(1, LibraryController.getFilter());
     Toast.show('Refreshed');
   });
+
+  const perfSelect = document.getElementById('perfModeSelect');
+  if (perfSelect) {
+    perfSelect.addEventListener('change', async (e) => {
+      const mode = e.target.value;
+      try {
+        await API.postJSON('/api/perf/mode', { mode });
+        Toast.show(`Mode set: ${mode}`);
+      } catch {
+        Toast.show('Failed to set mode', 'err');
+      }
+    });
+  }
 
   document.getElementById('syncToggleBtn').addEventListener('click', () => SyncController.toggle());
   document.getElementById('clearBtn')     .addEventListener('click', () => SyncController.clearAll());
@@ -58,8 +93,9 @@
   document.getElementById('modalCloseBtn').addEventListener('click', () => ModalController.close());
 
   // ── Modal action buttons ──────────────────────────────────────────────────
-  document.getElementById('openFolderBtn').addEventListener('click', () => ModalController.openFolder());
-  document.getElementById('copyPathBtn')  .addEventListener('click', () => ModalController.copyPath());
+  document.getElementById('openTruesizerBtn').addEventListener('click', () => ModalController.openInTrueSizer());
+  document.getElementById('openFolderBtn')   .addEventListener('click', () => ModalController.openFolder());
+  document.getElementById('copyPathBtn')     .addEventListener('click', () => ModalController.copyPath());
 
   // ── SSE: update search button text when count changes ────────────────────
   document.addEventListener('emb:indexed', e => {
@@ -91,4 +127,5 @@
   SyncController.start();
   FolderController.init();
   TabController.restore();
+  PerfController.init();
 })();
