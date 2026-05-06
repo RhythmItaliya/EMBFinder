@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -61,6 +62,32 @@ func clearIndexQueue() int {
 	indexQueue = nil
 	queueStarted = false
 	return n
+}
+
+func removeIndexQueuePath(path string) int {
+	indexQueueMu.Lock()
+	defer indexQueueMu.Unlock()
+	removed := 0
+	filteredQueue := make([]indexRequest, 0, len(indexQueue))
+	for _, req := range indexQueue {
+		filteredPaths := make([]string, 0, len(req.paths))
+		for _, p := range req.paths {
+			if p == path {
+				removed++
+				continue
+			}
+			filteredPaths = append(filteredPaths, p)
+		}
+		if len(filteredPaths) > 0 {
+			req.paths = filteredPaths
+			filteredQueue = append(filteredQueue, req)
+		}
+	}
+	indexQueue = filteredQueue
+	if len(indexQueue) == 0 {
+		queueStarted = false
+	}
+	return removed
 }
 
 func runIndexQueue() {
@@ -292,6 +319,8 @@ func hClear(w http.ResponseWriter, r *http.Request) {
 	idxState.Status = "Idle"
 	idxState.mu.Unlock()
 
+	// Reset all folder indexed counts to 0 (designs table is empty)
+	dbRecalcAllFolderCounts()
 	RefreshIdxStateCounts()
 	log.Printf("[Clear] Database and memory index wiped successfully")
 	writeJSON(w, map[string]interface{}{"status": "cleared"})
@@ -329,9 +358,13 @@ func hStopAllIndexing(w http.ResponseWriter, r *http.Request) {
 	idxState.Running = false
 	idxState.UserPaused = true
 	idxState.Status = "Stopped by user"
+	idxState.ScanDone = true
+	idxState.CurrentRoot = ""
+	idxState.CurrentFile = ""
 	idxState.mu.Unlock()
 
 	cleared := clearIndexQueue()
+	dbStopAllFolders()
 	RefreshIdxStateCounts()
 	writeJSON(w, map[string]interface{}{
 		"status":        "stopped",
@@ -353,6 +386,28 @@ func hFolderList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, folders)
 }
 
+// ── GET /api/perf ───────────────────────────────────────────────────────────
+// Returns current system metrics and adaptive performance state.
+func hPerf(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, getPerfMetrics())
+}
+
+// ── POST /api/perf/mode ─────────────────────────────────────────────────────
+// Sets performance mode: auto | performance | balanced | power_saver
+func hPerfMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, errJSON("invalid body"))
+		return
+	}
+	mode := parsePerfMode(body.Mode)
+	setPerfMode(mode)
+	updatePerf()
+	writeJSON(w, map[string]string{"status": "ok", "mode": string(mode)})
+}
+
 // hFolderRescan triggers an immediate rescan of a specific folder.
 func hFolderRescan(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -366,10 +421,69 @@ func hFolderRescan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, errJSON("path required"))
 		return
 	}
+	if st, err := os.Stat(body.Path); err != nil || !st.IsDir() {
+		writeJSON(w, errJSON("path not found"))
+		return
+	}
+
+	added := addSelectedDriveRoot(body.Path)
 
 	enqueueIndex([]string{body.Path}, true)
 
-	writeJSON(w, map[string]string{"status": "queued", "path": body.Path})
+	writeJSON(w, map[string]interface{}{"status": "queued", "path": body.Path, "selected": added})
+}
+
+// hFolderStop stops an in-progress scan or removes a queued folder scan.
+func hFolderStop(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, errJSON("invalid body"))
+		return
+	}
+	if body.Path == "" {
+		writeJSON(w, errJSON("path required"))
+		return
+	}
+
+	removed := removeIndexQueuePath(body.Path)
+	stopped := false
+	cleanPath := filepath.Clean(body.Path)
+
+	idxState.mu.Lock()
+	currentRoot := filepath.Clean(idxState.CurrentRoot)
+	if idxState.Running && (currentRoot == cleanPath || strings.HasPrefix(currentRoot, cleanPath+string(os.PathSeparator))) {
+		idxState.Running = false
+		idxState.ScanDone = true
+		idxState.UserPaused = false
+		idxState.Status = "Stopped " + filepath.Base(cleanPath)
+		stopped = true
+	}
+	idxState.mu.Unlock()
+
+	if stopped {
+		name := filepath.Base(cleanPath)
+		if name == "" || name == "." || name == string(os.PathSeparator) {
+			name = cleanPath
+		}
+		dbSaveFolder(FolderStats{
+			Path:         cleanPath,
+			Name:         name,
+			TotalFiles:   int(dbGetTotalForFolder(cleanPath)),
+			IndexedFiles: dbCountForPath(cleanPath),
+			Status:       "Stopped",
+			LastScan:     time.Now().Unix(),
+		})
+	} else if removed > 0 {
+		dbSetFolderStatus(cleanPath, "Stopped")
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"status":          "ok",
+		"removed":         removed,
+		"running_stopped": stopped,
+	})
 }
 
 // ── GET /api/drives ──────────────────────────────────────────────────────────
@@ -723,18 +837,43 @@ func hOpenFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir := filepath.Dir(filePath)
+	// If it's a directory, open it directly. If it's a file, open its parent.
+	dir := filePath
+	st, err := os.Stat(filePath)
+	if err == nil && !st.IsDir() {
+		dir = filepath.Dir(filePath)
+	}
+
 	var cmd *exec.Cmd
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+
 	switch runtime.GOOS {
 	case "windows":
-		// Explorer highlights the specific file
-		cmd = exec.CommandContext(ctx, "explorer", "/select,"+filepath.ToSlash(filePath))
+		if err == nil && !st.IsDir() {
+			// Explorer highlights the specific file
+			cmd = exec.CommandContext(ctx, "explorer", "/select,"+filepath.ToSlash(filePath))
+		} else {
+			cmd = exec.CommandContext(ctx, "explorer", filepath.ToSlash(dir))
+		}
 	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", "-R", filePath)
+		if err == nil && !st.IsDir() {
+			cmd = exec.CommandContext(ctx, "open", "-R", filePath)
+		} else {
+			cmd = exec.CommandContext(ctx, "open", dir)
+		}
 	default: // linux
-		cmd = exec.CommandContext(ctx, "xdg-open", dir)
+		highlightPath := ""
+		if err == nil && !st.IsDir() {
+			highlightPath = filePath
+		}
+		if err := openFolderLinux(ctx, dir, highlightPath); err != nil {
+			log.Printf("[OpenFile] Failed: %v", err)
+			writeJSON(w, errJSON("could not open folder: "+err.Error()))
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "path": dir})
+		return
 	}
 	if err := cmd.Run(); err != nil {
 		log.Printf("[OpenFile] Failed: %v", err)
@@ -742,6 +881,110 @@ func hOpenFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok", "path": dir})
+}
+
+// openFolderLinux opens dir in a file manager, trying to SELECT filePath if non-empty.
+func openFolderLinux(ctx context.Context, dir, filePath string) error {
+	// Managers that support file-selection / highlighting
+	if filePath != "" {
+		if _, err := exec.LookPath("nautilus"); err == nil {
+			if e := exec.CommandContext(ctx, "nautilus", "--select", filePath).Start(); e == nil {
+				return nil
+			}
+		}
+		if _, err := exec.LookPath("nemo"); err == nil {
+			if e := exec.CommandContext(ctx, "nemo", filePath).Start(); e == nil {
+				return nil
+			}
+		}
+		if _, err := exec.LookPath("dolphin"); err == nil {
+			if e := exec.CommandContext(ctx, "dolphin", "--select", filePath).Start(); e == nil {
+				return nil
+			}
+		}
+	}
+	// Managers that just open the folder
+	candidates := [][]string{
+		{"gio", "open", dir},
+		{"thunar", dir},
+		{"pcmanfm", dir},
+		{"caja", dir},
+		{"xdg-open", dir},
+	}
+	for _, c := range candidates {
+		if _, err := exec.LookPath(c[0]); err == nil {
+			return exec.CommandContext(ctx, c[0], c[1:]...).Start()
+		}
+	}
+	return errors.New("no file manager found")
+}
+
+// ── GET /api/pick-folder ─────────────────────────────────────────────────────
+// Opens a native OS directory picker and returns the selected path.
+func hPickFolder(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var path string
+	var err error
+
+	switch runtime.GOOS {
+	case "windows":
+		// Windows: use PowerShell to open a folder picker
+		script := `
+$app = New-Object -ComObject Shell.Application
+$folder = $app.BrowseForFolder(0, "Select Embroidery Folder", 0, 0)
+if ($folder) { $folder.Self.Path }
+`
+		out, e := exec.CommandContext(ctx, "powershell", "-Command", script).Output()
+		if e != nil {
+			err = e
+		} else {
+			path = strings.TrimSpace(string(out))
+		}
+	case "darwin":
+		// macOS: use osascript
+		script := `choose folder with prompt "Select Embroidery Folder" as string`
+		out, e := exec.CommandContext(ctx, "osascript", "-e", script).Output()
+		if e != nil {
+			err = e
+		} else {
+			// Convert "Macintosh HD:Users:..." to POSIX path
+			p := strings.TrimSpace(string(out))
+			if strings.HasSuffix(p, ":") {
+				p = p[:len(p)-1]
+			}
+			path = "/" + strings.ReplaceAll(p, ":", "/")
+		}
+	default: // linux
+		path, err = pickFolderLinux(ctx)
+	}
+
+	if err != nil {
+		log.Printf("[PickFolder] Failed or canceled: %v", err)
+		writeJSON(w, map[string]string{"status": "canceled"})
+		return
+	}
+	if path == "" {
+		writeJSON(w, map[string]string{"status": "canceled"})
+		return
+	}
+
+	writeJSON(w, map[string]string{"status": "ok", "path": path})
+}
+
+func pickFolderLinux(ctx context.Context) (string, error) {
+	// Zenity is most common
+	if _, err := exec.LookPath("zenity"); err == nil {
+		out, err := exec.CommandContext(ctx, "zenity", "--file-selection", "--directory", "--title=Select Embroidery Folder").Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	// Kdialog for KDE
+	if _, err := exec.LookPath("kdialog"); err == nil {
+		out, err := exec.CommandContext(ctx, "kdialog", "--getexistingdirectory", ".", "--title", "Select Embroidery Folder").Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	return "", errors.New("no native picker (zenity/kdialog) found")
 }
 
 // ── POST /api/emb-info ────────────────────────────────────────────────────────
@@ -837,4 +1080,54 @@ func hOpenTrueSizer(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
 	io.Copy(w, resp.Body)
+}
+
+// ── POST /api/db/backup ───────────────────────────────────────────────────────
+// Creates a timestamped backup copy of the SQLite DB file before any cleanup.
+func hDbBackup(w http.ResponseWriter, r *http.Request) {
+	src := Config.DBPath
+	ts := time.Now().Format("2006-01-02_15-04-05")
+	dst := src + ".backup-" + ts
+
+	in, err := os.Open(src)
+	if err != nil {
+		writeJSON(w, errJSON("cannot open DB: "+err.Error()))
+		return
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		writeJSON(w, errJSON("cannot create backup file: "+err.Error()))
+		return
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		os.Remove(dst)
+		writeJSON(w, errJSON("backup copy failed: "+err.Error()))
+		return
+	}
+	log.Printf("[Backup] DB backed up → %s", dst)
+	writeJSON(w, map[string]string{"status": "ok", "backup_path": dst})
+}
+
+// ── POST /api/db/repair ───────────────────────────────────────────────────────
+// Deduplicates designs by file_path and recalculates all folder counts.
+func hDbRepair(w http.ResponseWriter, r *http.Request) {
+	before := dbCount()
+	dbDeduplicatePaths()
+	dbRecalcAllFolderCounts()
+	dbFixCompletedStatus()
+	after := dbCount()
+	RefreshIdxStateCounts()
+
+	removed := before - after
+	log.Printf("[Repair] Dedup complete: %d → %d designs (%d removed)", before, after, removed)
+	writeJSON(w, map[string]interface{}{
+		"status":  "ok",
+		"before":  before,
+		"after":   after,
+		"removed": removed,
+	})
 }
