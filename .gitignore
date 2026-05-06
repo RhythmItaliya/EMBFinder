@@ -55,6 +55,7 @@ embedder/MobileCLIP-B*
 *.msi
 
 # Logs
+.logs/
 *.log
 **/logs/
 npm-debug.log*
