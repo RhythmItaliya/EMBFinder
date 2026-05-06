@@ -135,7 +135,7 @@ func watcherLoop() {
 }
 
 func pathOnSelectedDrive(p string) bool {
-	return findFolderRoot(p) != ""
+	return isSelectedPath(p)
 }
 
 func findFolderRoot(p string) string {
@@ -172,8 +172,8 @@ func handleWatcherEvent(event fsnotify.Event) {
 		return
 	}
 
-	// Mark folder as outdated if any file event occurs
-	db.Exec("UPDATE folders SET needs_rescan=1, status='Outdated' WHERE path=?", root)
+	// Mark matching folder rows as outdated if any file event occurs.
+	db.Exec("UPDATE folders SET needs_rescan=1, status='Outdated' WHERE ? = path OR ? LIKE path || '/%'", event.Name, event.Name)
 
 	// New directory? Subscribe recursively (covers nested copies / git clones).
 	if event.Has(fsnotify.Create) {
@@ -200,6 +200,8 @@ func handleWatcherEvent(event fsnotify.Event) {
 			log.Printf("[Watcher] removed: %s", event.Name)
 			dbRemoveByPath(event.Name)
 			globalIndex.RemoveByPrefix(event.Name)
+			dbRefreshFolderStatsForPath(event.Name)
+			RefreshIdxStateCounts()
 			return
 		}
 		// Sidecar removed → re-index its .emb (sidecar vector goes away).
@@ -212,6 +214,23 @@ func handleWatcherEvent(event fsnotify.Event) {
 	// Rename — might be a move. We don't delete immediately so processOneEmb
 	// can detect the move via content-hash when the new file is created.
 	if event.Has(fsnotify.Rename) {
+		if isEmb {
+			oldPath := event.Name
+			go func() {
+				time.Sleep(2 * time.Second)
+				if _, err := os.Stat(oldPath); err == nil {
+					return
+				}
+				if dbHasPath(oldPath) {
+					dbRemoveByPath(oldPath)
+					globalIndex.RemoveByPrefix(oldPath)
+					dbRefreshFolderStatsForPath(oldPath)
+					RefreshIdxStateCounts()
+					log.Printf("[Watcher] rename cleanup removed stale path: %s", oldPath)
+				}
+			}()
+			return
+		}
 		if !isEmb {
 			// If a sidecar is renamed, treat as removal for its .emb
 			if emb := findEmbForSidecar(event.Name); emb != "" {
@@ -257,12 +276,15 @@ func runWatcherIndex(path string) {
 		// File vanished between debounce and run — treat as removal.
 		dbRemoveByPath(path)
 		globalIndex.RemoveByPrefix(path)
+		dbRefreshFolderStatsForPath(path)
+		RefreshIdxStateCounts()
 		return
 	}
 	// Force=true so a Write to an existing file actually re-embeds.
 	status := processOneEmb(path, "", true)
 	if status == "indexed" || status == "moved" {
 		log.Printf("[Watcher] auto-updated: %s (%s)", filepath.Base(path), status)
+		dbRefreshFolderStatsForPath(path)
 		RefreshIdxStateCounts()
 	}
 }
