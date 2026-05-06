@@ -10,8 +10,9 @@ import (
 )
 
 // version and buildDate are injected at build time via ldflags:
-//   -X main.version=1.2.3
-//   -X main.buildDate=2026-05-03
+//
+//	-X main.version=1.2.3
+//	-X main.buildDate=2026-05-03
 var (
 	version   = "dev"
 	buildDate = "unknown"
@@ -39,6 +40,7 @@ func startCore() {
 
 	// ── Drive detection ───────────────────────────────────────────────────────
 	drives := autoLibPaths()
+	initSelectedDrives()
 	log.Printf("[Drives] Auto-detected: %d", len(drives))
 	for _, d := range drives {
 		log.Printf("[Drives]   → %s (%s)", d.Label, d.Path)
@@ -68,26 +70,47 @@ func startCore() {
 			RefreshIdxStateCounts()
 		}
 	}()
+
+	// ── Stall watchdog: auto-recover stuck indexing ──────────────────────────
+	go func() {
+		for {
+			time.Sleep(15 * time.Second)
+			idxState.mu.Lock()
+			running := idxState.Running
+			paused := idxState.UserPaused
+			last := idxState.LastProgressAt
+			if running && !paused && !last.IsZero() && time.Since(last) > 2*time.Minute {
+				idxState.Running = false
+				idxState.ScanDone = true
+				idxState.Status = "Auto-recovered from stalled scan"
+				log.Printf("[Watchdog] Scan stall detected; force-stopped indexer for recovery")
+			}
+			idxState.mu.Unlock()
+		}
+	}()
 }
 
 // buildMux registers all /api/* routes and returns the mux.
 // The caller adds /config.js and the static file server.
 func buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/drives",             hDriveList)
-	mux.HandleFunc("/api/search",             hSearch)
-	mux.HandleFunc("/api/preview/",           hPreview)
-	mux.HandleFunc("/api/thumbnail/",         hThumbnail)
+	mux.HandleFunc("/api/drives", hDriveList)
+	mux.HandleFunc("/api/drives/select", hDriveSelect)
+	mux.HandleFunc("/api/search", hSearch)
+	mux.HandleFunc("/api/preview/", hPreview)
+	mux.HandleFunc("/api/thumbnail/", hThumbnail)
 	mux.HandleFunc("/api/index/state/stream", hIndexStateStream)
-	mux.HandleFunc("/api/index/toggle",       hToggleSync)
-	mux.HandleFunc("/api/clear",              hClear)
-	mux.HandleFunc("/api/latest",             hLatest)
-	mux.HandleFunc("/api/browse",             hBrowseEMB)
-	mux.HandleFunc("/api/open-file",          hOpenFile)
-	mux.HandleFunc("/api/emb-info",           hEmbInfo)
-	mux.HandleFunc("/api/open-truesizer",     hOpenTrueSizer)
-	mux.HandleFunc("/api/folders",            hFolderList)
-	mux.HandleFunc("/api/folders/rescan",     hFolderRescan)
+	mux.HandleFunc("/api/index/start", hIndexStart)
+	mux.HandleFunc("/api/index/toggle", hToggleSync)
+	mux.HandleFunc("/api/index/stop-all", hStopAllIndexing)
+	mux.HandleFunc("/api/clear", hClear)
+	mux.HandleFunc("/api/latest", hLatest)
+	mux.HandleFunc("/api/browse", hBrowseEMB)
+	mux.HandleFunc("/api/open-file", hOpenFile)
+	mux.HandleFunc("/api/emb-info", hEmbInfo)
+	mux.HandleFunc("/api/open-truesizer", hOpenTrueSizer)
+	mux.HandleFunc("/api/folders", hFolderList)
+	mux.HandleFunc("/api/folders/rescan", hFolderRescan)
 	return mux
 }
 

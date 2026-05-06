@@ -39,19 +39,21 @@ func isEmbExt(ext string) bool { return strings.EqualFold(ext, ".emb") }
 // IndexState holds the real-time state of the background indexing engine.
 // All fields are safe for concurrent read/write via its embedded RWMutex.
 type IndexState struct {
-	mu          sync.RWMutex
-	Running     bool           `json:"running"`
-	Progress    int32          `json:"processed"`  // atomic — files finished
-	Discovered  int32          `json:"discovered"` // atomic — files found by scanner
-	Total       int32          `json:"total"`      // atomic — final total (set when scan ends)
-	ScanDone    bool           `json:"scan_done"`  // scanner has finished walking
-	CurrentFile string         `json:"current_file"`
-	Status      string         `json:"status"`
-	Log         []string       `json:"log"`
-	ErrMsg      string         `json:"error,omitempty"`
-	Counts      map[string]int `json:"counts"`
-	UserPaused  bool           `json:"user_paused"`
-	LastHeart   time.Time      `json:"-"`
+	mu             sync.RWMutex
+	Running        bool           `json:"running"`
+	Progress       int32          `json:"processed"`  // atomic — files finished
+	Discovered     int32          `json:"discovered"` // atomic — files found by scanner
+	Total          int32          `json:"total"`      // atomic — final total (set when scan ends)
+	ScanDone       bool           `json:"scan_done"`  // scanner has finished walking
+	CurrentFile    string         `json:"current_file"`
+	CurrentRoot    string         `json:"current_root"`
+	Status         string         `json:"status"`
+	Log            []string       `json:"log"`
+	ErrMsg         string         `json:"error,omitempty"`
+	Counts         map[string]int `json:"counts"`
+	UserPaused     bool           `json:"user_paused"`
+	LastHeart      time.Time      `json:"-"`
+	LastProgressAt time.Time      `json:"-"`
 
 	// Global System Overview
 	GlobalTotal   int32 `json:"global_total"`
@@ -102,6 +104,7 @@ func (s *IndexState) snap() map[string]interface{} {
 		"total":          displayTotal,
 		"scan_done":      scanDone,
 		"current_file":   s.CurrentFile,
+		"current_root":   s.CurrentRoot,
 		"status":         status,
 		"log":            logCopy,
 		"error":          errMsg,
@@ -117,6 +120,14 @@ func (s *IndexState) addLog(msg string) {} // Deprecated
 var idxState = &IndexState{
 	Status: "idle",
 	Counts: make(map[string]int),
+}
+
+func bumpProgress(delta int32) int32 {
+	v := atomic.AddInt32(&idxState.Progress, delta)
+	idxState.mu.Lock()
+	idxState.LastProgressAt = time.Now()
+	idxState.mu.Unlock()
+	return v
 }
 
 // RefreshIdxStateCounts reloads per-format counts and global stats from SQLite.
@@ -145,6 +156,9 @@ func streamFiles(dir string, out chan<- string, done chan<- struct{}, resumeFrom
 	defer func() {
 		done <- struct{}{}
 	}()
+	idxState.mu.Lock()
+	idxState.CurrentRoot = dir
+	idxState.mu.Unlock()
 
 	// First pass: quick count to get the "Total" for this folder if not already known
 	// or if we want real-time accurate totals.
@@ -154,6 +168,9 @@ func streamFiles(dir string, out chan<- string, done chan<- struct{}, resumeFrom
 			return nil
 		}
 		if !d.IsDir() && isSupportedExt(filepath.Ext(p)) {
+			if !isSelectedPath(p) {
+				return nil
+			}
 			folderTotal++
 		}
 		if d.IsDir() {
@@ -166,7 +183,7 @@ func streamFiles(dir string, out chan<- string, done chan<- struct{}, resumeFrom
 		return nil
 	})
 	atomic.AddInt32(&idxState.Total, folderTotal)
-	
+
 	// Persist the total count to the folder record
 	dbSaveFolder(FolderStats{
 		Path:       dir,
@@ -218,6 +235,9 @@ func streamFiles(dir string, out chan<- string, done chan<- struct{}, resumeFrom
 		}
 
 		if isSupportedExt(filepath.Ext(p)) {
+			if !isSelectedPath(p) {
+				return nil
+			}
 			if skipping {
 				if p == resumeFrom {
 					skipping = false
@@ -226,7 +246,7 @@ func streamFiles(dir string, out chan<- string, done chan<- struct{}, resumeFrom
 				// Even when skipping, we count towards 'discovered' and 'progress'
 				// so the UI percentage (proc/total) is accurate for resumed drives.
 				atomic.AddInt32(&idxState.Discovered, 1)
-				atomic.AddInt32(&idxState.Progress, 1)
+				bumpProgress(1)
 				return nil
 			}
 
@@ -375,9 +395,12 @@ func resizeForPreview(b []byte) []byte {
 
 // numIndexWorkers returns an optimal worker count (2-8).
 func numIndexWorkers() int {
+	if Config.IndexWorkers > 0 {
+		return Config.IndexWorkers
+	}
 	w := runtime.NumCPU() - 1
-	if w < 2 {
-		return 2
+	if w < 1 {
+		return 1
 	}
 	if w > 8 {
 		return 8
@@ -430,7 +453,6 @@ func processOneEmb(fp, basePath string, force bool) string {
 			return "skipped"
 		}
 	}
-
 
 	// ── STEP 2: CONTENT DNA (Hash) ───────────────────────────────────────────
 	id := fileID(fp)
@@ -576,6 +598,7 @@ func StartIndexingMulti(paths []string, force bool) {
 	atomic.StoreInt32(&idxState.Discovered, 0)
 	atomic.StoreInt32(&idxState.Total, 0)
 	idxState.ScanDone = false
+	idxState.LastProgressAt = time.Now()
 	idxState.mu.Unlock()
 
 	go func() {
@@ -620,7 +643,7 @@ func StartIndexingMulti(paths []string, force bool) {
 
 			// Load or create folder stats
 			lastFile, lastProcessed, _ := dbLoadProgress(p)
-			
+
 			// Initial stats update
 			dbSaveFolder(FolderStats{
 				Path:         p,
@@ -645,10 +668,10 @@ func StartIndexingMulti(paths []string, force bool) {
 			scanWG.Add(1)
 			go func(root string) {
 				defer scanWG.Done()
-				
+
 				// Load last checkpoint to skip ahead
 				lastFile, _, _ := dbLoadProgress(root)
-				
+
 				done := make(chan struct{}, 1)
 				go func() {
 					streamFiles(root, fileCh, done, lastFile)
@@ -707,14 +730,22 @@ func StartIndexingMulti(paths []string, force bool) {
 
 			fp := fp
 			base := pickBase(fp)
+			if base != "" && !isSelectedRoot(base) {
+				bumpProgress(1)
+				continue
+			}
 
 			sem <- struct{}{}
 			wg.Add(1)
 			go func() {
 				defer func() { <-sem; wg.Done() }()
 
+				if base != "" && !isSelectedRoot(base) {
+					bumpProgress(1)
+					return
+				}
 				processOneEmb(fp, base, force)
-				atomic.AddInt32(&idxState.Progress, 1)
+				bumpProgress(1)
 
 				// Persist per-drive progress every 50 files.
 				progMu.Lock()
@@ -723,6 +754,15 @@ func StartIndexingMulti(paths []string, force bool) {
 				progMu.Unlock()
 				if cnt%50 == 0 {
 					dbSaveProgress(base, fp, cnt)
+					if base != "" {
+						dbSaveFolder(FolderStats{
+							Path:         base,
+							Name:         filepath.Base(base),
+							IndexedFiles: dbCountForPath(base),
+							Status:       "In Progress",
+							LastScan:     time.Now().Unix(),
+						})
+					}
 					RefreshIdxStateCounts()
 				}
 			}()
@@ -734,7 +774,7 @@ func StartIndexingMulti(paths []string, force bool) {
 		for base, cnt := range progCounts {
 			if base != "" {
 				dbSaveProgress(base, "", cnt)
-				
+
 				// Final folder status update
 				idxFiles := dbCountForPath(base) // We need this function
 				dbSaveFolder(FolderStats{
@@ -809,14 +849,33 @@ func AutoIndexAllDrives() {
 			log.Printf("[Discovery] Starting global EMB scouting...")
 			drives := autoLibPaths()
 			extraPaths := os.Getenv("EMBFIND_EXTRA_DRIVES")
+			extraRoots := make([]string, 0)
+			for _, ep := range strings.Split(extraPaths, ";") {
+				ep = strings.TrimSpace(ep)
+				if ep != "" {
+					extraRoots = append(extraRoots, ep)
+				}
+			}
 			var globalTotal int32
 			discoveredFolders := make(map[string]int)
 			lastRefresh := time.Now()
-			
-			scout := func(d DriveEntry) {
-				if !usableDrive(d) { return }
+
+			scout := func(d DriveEntry, skipExtraSubtrees bool) {
+				if !usableDrive(d) {
+					return
+				}
 				log.Printf("[Discovery]   Scouting %s...", d.Label)
 				filepath.Walk(d.Path, func(fp string, info os.FileInfo, err error) error {
+					if skipExtraSubtrees {
+						for _, ep := range extraRoots {
+							if ep != "" && fp != ep && strings.HasPrefix(fp, ep+string(os.PathSeparator)) {
+								if info != nil && info.IsDir() {
+									return filepath.SkipDir
+								}
+								return nil
+							}
+						}
+					}
 					if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(fp), ".emb") {
 						atomic.AddInt32(&globalTotal, 1)
 						dir := filepath.Dir(fp)
@@ -824,7 +883,7 @@ func AutoIndexAllDrives() {
 							dbSaveFolder(FolderStats{Path: dir, Name: filepath.Base(dir), TotalFiles: 0, Status: "Scouting..."})
 						}
 						discoveredFolders[dir]++
-						
+
 						if time.Since(lastRefresh) > 5*time.Second {
 							idxState.mu.Lock()
 							idxState.Total = globalTotal
@@ -843,24 +902,28 @@ func AutoIndexAllDrives() {
 			// 1. Scout extra drives first
 			for _, d := range drives {
 				isExtra := false
-				for _, ep := range strings.Split(extraPaths, ";") {
+				for _, ep := range extraRoots {
 					if ep != "" && d.Path == ep {
 						isExtra = true
 						break
 					}
 				}
-				if isExtra { scout(d) }
+				if isExtra {
+					scout(d, false)
+				}
 			}
 			// 2. Scout everything else
 			for _, d := range drives {
 				isExtra := false
-				for _, ep := range strings.Split(extraPaths, ";") {
+				for _, ep := range extraRoots {
 					if ep != "" && d.Path == ep {
 						isExtra = true
 						break
 					}
 				}
-				if !isExtra { scout(d) }
+				if !isExtra {
+					scout(d, true)
+				}
 			}
 
 			log.Printf("[Discovery] Found %d designs in %d folders", globalTotal, len(discoveredFolders))

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -37,6 +38,13 @@ type appConfig struct {
 
 	// CLIP model name forwarded to the embedder subprocess
 	CLIPModel string
+
+	// Auto-tuned runtime controls
+	CPUCores      int
+	TotalRAMGB    int
+	IndexWorkers  int
+	SearchWorkers int
+	PerfProfile   string
 }
 
 // Config is the global singleton. Do not mutate after initConfig() returns.
@@ -100,6 +108,24 @@ func initConfig() {
 		CLIPModel:    getEnv("CLIP_MODEL", "ViT-L-14"),
 	}
 
+	// ── 4.1 Auto-tune runtime profile (CPU/RAM aware) ───────────────────────
+	Config.CPUCores = runtime.NumCPU()
+	Config.TotalRAMGB = detectTotalRAMGB()
+	Config.PerfProfile = "balanced"
+
+	autoWorkers := pickAutoIndexWorkers(Config.CPUCores, Config.TotalRAMGB)
+	if mw := strings.TrimSpace(os.Getenv("MAX_WORKERS")); mw != "" {
+		if n, err := strconv.Atoi(mw); err == nil && n > 0 {
+			autoWorkers = n
+		}
+	}
+	Config.IndexWorkers = autoWorkers
+	sw := Config.CPUCores - 1
+	if sw < 1 {
+		sw = 1
+	}
+	Config.SearchWorkers = sw
+
 	// ── 5. Port conflict resolution ───────────────────────────────────────────
 	// If the configured port is already occupied, find the next free one.
 	// This prevents a crash when restarting quickly after a previous instance
@@ -114,10 +140,20 @@ func initConfig() {
 	// Reduce GC target percentage to keep the in-memory vector index lean.
 	// A value of 50 means GC triggers when heap grows 50% past the last collection.
 	// Default Go value is 100; lower = more GC runs but smaller resident memory.
-	debug.SetGCPercent(50)
+	gcPercent := 50
+	if Config.TotalRAMGB > 0 && Config.TotalRAMGB <= 8 {
+		gcPercent = 35
+		Config.PerfProfile = "low-ram"
+	} else if Config.TotalRAMGB >= 24 {
+		gcPercent = 80
+		Config.PerfProfile = "high-memory"
+	}
+	debug.SetGCPercent(gcPercent)
 
 	log.Printf("[Config] Mode=%s  Host=%s:%s  DB=%s  CLIP=%s",
 		strings.ToUpper(mode), Config.Host, Config.Port, Config.DBPath, Config.CLIPModel)
+	log.Printf("[Perf] profile=%s cpu=%d ram=%dGB index_workers=%d search_workers=%d gc=%d",
+		Config.PerfProfile, Config.CPUCores, Config.TotalRAMGB, Config.IndexWorkers, Config.SearchWorkers, gcPercent)
 }
 
 // ── URL helpers ───────────────────────────────────────────────────────────────
@@ -179,4 +215,57 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func pickAutoIndexWorkers(cpuCores, ramGB int) int {
+	if cpuCores <= 2 {
+		return 1
+	}
+	if ramGB > 0 && ramGB <= 8 {
+		w := cpuCores / 2
+		if w < 1 {
+			w = 1
+		}
+		if w > 4 {
+			w = 4
+		}
+		return w
+	}
+	w := cpuCores - 1
+	if ramGB > 0 && ramGB <= 16 && w > 6 {
+		w = 6
+	}
+	if ramGB >= 24 && w > 10 {
+		w = 10
+	}
+	if w < 2 {
+		w = 2
+	}
+	return w
+}
+
+// detectTotalRAMGB returns total system RAM in GB on Linux, or 0 if unknown.
+func detectTotalRAMGB() int {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			f := strings.Fields(line)
+			if len(f) < 2 {
+				return 0
+			}
+			kb, err := strconv.ParseInt(f[1], 10, 64)
+			if err != nil || kb <= 0 {
+				return 0
+			}
+			gb := int(kb / 1024 / 1024)
+			if gb < 1 {
+				gb = 1
+			}
+			return gb
+		}
+	}
+	return 0
 }
