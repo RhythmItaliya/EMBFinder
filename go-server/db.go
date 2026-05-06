@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -54,6 +55,8 @@ func initDB(path string) error {
 	db.Exec("ALTER TABLE folders ADD COLUMN needs_rescan INTEGER DEFAULT 0")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_path ON designs(file_path)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_designs_mtime ON designs(file_path, file_mtime, size_kb)")
+	// UNIQUE constraint prevents duplicate file_path rows (different hash IDs same path)
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_designs_unique_path ON designs(file_path)")
 
 	// Per-folder tracking: records independent progress and status for each selected root.
 	db.Exec(`CREATE TABLE IF NOT EXISTS folders (
@@ -75,7 +78,46 @@ func initDB(path string) error {
 		processed      INTEGER DEFAULT 0,
 		updated_at     INTEGER DEFAULT (strftime('%s','now'))
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// dbStartupCleanup runs dedup + folder-count recalc in the background so the
+// server can accept connections immediately on startup.
+func dbStartupCleanup() {
+	go func() {
+		log.Printf("[DB] Running startup cleanup (dedup + folder count recalc)...")
+		dbResetStuckFolders()
+		dbDeduplicatePaths()
+		dbRecalcAllFolderCounts()
+		dbFixCompletedStatus()
+		log.Printf("[DB] Startup cleanup complete")
+	}()
+}
+
+// dbFixCompletedStatus marks any folder where indexed_files >= total_files
+// (and total_files > 0) as 'Completed', repairing folders stuck in
+// 'Pending', 'Stopped', or 'Scouting...' even though they are fully indexed.
+func dbFixCompletedStatus() {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	res, err := db.Exec(`
+		UPDATE folders
+		SET status = 'Completed',
+		    needs_rescan = 0,
+		    updated_at = strftime('%s','now')
+		WHERE total_files > 0
+		  AND indexed_files >= total_files
+		  AND status IN ('Pending','Stopped','Scouting...','Error')
+	`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			log.Printf("[DB] Auto-completed %d fully-indexed folders", n)
+		}
+	}
 }
 
 func f32b(v []float32) []byte {
@@ -117,10 +159,23 @@ func dbUpsertDual(e Entry, preview, thumb []byte, emb, sidecarEmb []float32) err
 	if len(sidecarEmb) > 0 {
 		sidecarBlob = f32b(sidecarEmb)
 	}
+	// ON CONFLICT on file_path: update all fields so the same physical file
+	// never accumulates multiple rows even if the content-hash changes.
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO designs
+		`INSERT INTO designs
 		 (id,file_path,file_name,format,size_kb,file_mtime,preview_png,thumbnail,embedding,sidecar_embedding)
-		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES(?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(file_path) DO UPDATE SET
+		   id=excluded.id,
+		   file_name=excluded.file_name,
+		   format=excluded.format,
+		   size_kb=excluded.size_kb,
+		   file_mtime=excluded.file_mtime,
+		   preview_png=COALESCE(excluded.preview_png, preview_png),
+		   thumbnail=COALESCE(excluded.thumbnail, thumbnail),
+		   embedding=excluded.embedding,
+		   sidecar_embedding=COALESCE(excluded.sidecar_embedding, sidecar_embedding),
+		   indexed_at=strftime('%s','now')`,
 		e.ID, e.FilePath, e.FileName, e.Format, e.SizeKB, e.FileMTime, preview, thumb, f32b(emb), sidecarBlob,
 	)
 	return err
@@ -212,7 +267,8 @@ func dbCount() int {
 
 func dbCountForPath(path string) int {
 	var n int
-	db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path LIKE ?", path+"%").Scan(&n)
+	// Use '/' separator so 'SINGLEHEAD-25' does NOT match 'SINGLEHEAD-25 (COD)'
+	db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path LIKE ?", path+"/%").Scan(&n)
 	return n
 }
 
@@ -313,20 +369,21 @@ func dbSaveFolder(s FolderStats) {
 	defer writeMu.Unlock()
 
 	var existingStatus string
-	var existingIndexed int
-	_ = db.QueryRow("SELECT status, indexed_files FROM folders WHERE path=?", s.Path).Scan(&existingStatus, &existingIndexed)
+	_ = db.QueryRow("SELECT status FROM folders WHERE path=?", s.Path).Scan(&existingStatus)
 
-	// If total_files is 0, try to preserve existing value
+	// Preserve total_files if caller didn't set it
 	if s.TotalFiles == 0 {
 		db.QueryRow("SELECT total_files FROM folders WHERE path=?", s.Path).Scan(&s.TotalFiles)
 	}
-	// Never downgrade known indexed progress.
-	if existingIndexed > s.IndexedFiles {
-		s.IndexedFiles = existingIndexed
-	}
-	// Discovery should not overwrite active/completed scan status.
-	if strings.EqualFold(s.Status, "Scouting...") && existingStatus != "" && !strings.EqualFold(existingStatus, "Scouting...") {
-		s.Status = existingStatus
+
+	// Background discovery (Scouting... / Pending) must NEVER overwrite a real
+	// scan state (In Progress, Completed, Stopped, Error).
+	if existingStatus != "" &&
+		!strings.EqualFold(existingStatus, "Scouting...") &&
+		!strings.EqualFold(existingStatus, "Pending") {
+		if strings.EqualFold(s.Status, "Scouting...") || strings.EqualFold(s.Status, "Pending") {
+			s.Status = existingStatus
+		}
 	}
 
 	db.Exec(`INSERT INTO folders(path, name, total_files, indexed_files, last_file, status, needs_rescan, last_scan, updated_at)
@@ -370,6 +427,12 @@ func dbSetFolderStatus(path string, status string) {
 	db.Exec("UPDATE folders SET status=?, updated_at=strftime('%s','now') WHERE path=?", status, path)
 }
 
+func dbStopAllFolders() {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec("UPDATE folders SET status='Stopped', updated_at=strftime('%s','now') WHERE status='In Progress'")
+}
+
 // dbRefreshFolderStatsForPath refreshes indexed_files for every folder that
 // could contain the given file path.
 func dbRefreshFolderStatsForPath(filePath string) {
@@ -393,4 +456,51 @@ func dbHasPath(path string) bool {
 	var n int
 	_ = db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path=?", path).Scan(&n)
 	return n > 0
+}
+
+// dbDeduplicatePaths removes duplicate file_path rows keeping the best row
+// (one with preview_png; if tie, most recently indexed).
+// Safe to call on startup before the UNIQUE index migration.
+func dbDeduplicatePaths() {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	// Step 1: for each duplicated path, delete rows that have no preview
+	db.Exec(`
+		DELETE FROM designs
+		WHERE file_path IN (
+			SELECT file_path FROM designs GROUP BY file_path HAVING COUNT(*) > 1
+		)
+		AND preview_png IS NULL
+	`)
+	// Step 2: keep only the most recently indexed row per path
+	db.Exec(`
+		DELETE FROM designs
+		WHERE rowid NOT IN (
+			SELECT MAX(rowid) FROM designs GROUP BY file_path
+		)
+	`)
+}
+
+// dbResetStuckFolders marks any folder that was 'In Progress' at startup as
+// 'Stopped' (the server crashed / was killed mid-scan).
+func dbResetStuckFolders() {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec(`UPDATE folders SET status='Stopped', needs_rescan=1,
+			updated_at=strftime('%s','now') WHERE status='In Progress'`)
+}
+
+// dbRecalcAllFolderCounts recomputes indexed_files for every folder row from
+// the actual designs table. Call after deduplication or a full clear.
+func dbRecalcAllFolderCounts() {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec(`
+		UPDATE folders
+		SET indexed_files = (
+			SELECT COUNT(*) FROM designs d
+			WHERE d.file_path LIKE folders.path || '/%'
+		),
+		updated_at = strftime('%s','now')
+	`)
 }
