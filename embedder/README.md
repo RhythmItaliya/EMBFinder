@@ -59,23 +59,47 @@ First run downloads ViT-L-14/OpenAI weights (~900 MB). Subsequent starts are ins
 
 ## API Endpoints
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `POST` | `/embed` | Query search — multi-crop texture vectors |
-| `POST` | `/embed-file` | Local file path embedding |
-| `POST` | `/embed-augmented` | Sidecar indexing — 6 augmented views |
-| `GET` | `/health` | Service status including `vram_mb` |
+### Embedding Endpoints
 
-### Response Format
+**`POST /embed`**
+- **Purpose:** Query search embedding — multi-crop with OpenAI ViT-L-14 weights
+- **Input:** `multipart/form-data` with image file
+- **Output:** JSON with `{"embedding": [0.021, -0.003, ...]}` and `"embeddings"` array (multi-crop views)
+- **Usage:** For every search query image uploaded by the user
+
+**`POST /embed-file`**
+- **Purpose:** Embed a local file path (used during indexing)
+- **Input:** JSON `{"path": "/path/to/image.jpg"}`
+- **Output:** JSON `{"embedding": [...], "preview_b64": "..."}`
+- **Usage:** Fast indexing path when files are on disk
+
+**`POST /embed-augmented`**
+- **Purpose:** Sidecar photo indexing — 6 augmented views (flip, ±5° rotation, ±15% brightness)
+- **Input:** `multipart/form-data` with image file
+- **Output:** JSON with `"embeddings"` array (6 augmented views)
+- **Usage:** Generate variation-invariant sidecar vector during design indexing
+
+### System Endpoints
+
+**`GET /health`**
+- **Output:** Service status including VRAM usage, model loaded, torch device
+- **Example:** `{"status": "ok", "model": "ViT-L-14", "vram_mb": 1687, "device": "cuda:0"}`
+
+---
+
+## Response Format
+
+All embedding endpoints return L2-normalised vectors. **Cosine similarity = dot product.**
 
 ```json
 {
-  "embedding":  [0.021, -0.003, ...],
-  "embeddings": [[...], [...], ...]
+  "embedding": [0.021, -0.003, 0.042, ...],
+  "embeddings": [[...], [...], [...]]
 }
 ```
 
-All vectors are L2-normalised. Cosine similarity = dot product.
+- `embedding`: Single averaged vector (for `/embed-file` and query `/embed`)
+- `embeddings`: Array of vectors (multi-crop `/embed` or augmented `/embed-augmented`)
 
 ---
 
