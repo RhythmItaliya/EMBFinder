@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -24,7 +25,80 @@ import (
 var (
 	embedderMu    sync.Mutex
 	searchWaiters int32
+	indexQueueMu  sync.Mutex
+	indexQueue    []indexRequest
+	queueStarted  bool
 )
+
+type indexRequest struct {
+	paths []string
+	force bool
+}
+
+func enqueueIndex(paths []string, force bool) {
+	if len(paths) == 0 {
+		return
+	}
+	indexQueueMu.Lock()
+	indexQueue = append(indexQueue, indexRequest{paths: paths, force: force})
+	if !queueStarted {
+		queueStarted = true
+		go runIndexQueue()
+	}
+	indexQueueMu.Unlock()
+}
+
+func indexQueueLen() int {
+	indexQueueMu.Lock()
+	defer indexQueueMu.Unlock()
+	return len(indexQueue)
+}
+
+func clearIndexQueue() int {
+	indexQueueMu.Lock()
+	defer indexQueueMu.Unlock()
+	n := len(indexQueue)
+	indexQueue = nil
+	queueStarted = false
+	return n
+}
+
+func runIndexQueue() {
+	for {
+		indexQueueMu.Lock()
+		if len(indexQueue) == 0 {
+			queueStarted = false
+			indexQueueMu.Unlock()
+			return
+		}
+		req := indexQueue[0]
+		indexQueueMu.Unlock()
+
+		idxState.mu.RLock()
+		running := idxState.Running
+		idxState.mu.RUnlock()
+		if running {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		filtered := make([]string, 0, len(req.paths))
+		for _, p := range req.paths {
+			if isSelectedRoot(p) || isSelectedPath(p) {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) > 0 {
+			StartIndexingMulti(filtered, req.force)
+		}
+
+		indexQueueMu.Lock()
+		if len(indexQueue) > 0 {
+			indexQueue = indexQueue[1:]
+		}
+		indexQueueMu.Unlock()
+	}
+}
 
 // ── Shared persistent HTTP client (connection pooling to Python embedder) ─────
 var httpClient = &http.Client{
@@ -41,6 +115,97 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 func errJSON(msg string) map[string]string { return map[string]string{"error": msg} }
+
+// ── POST /api/index/start ────────────────────────────────────────────────────
+// Starts indexing for specific paths, or all known folders if no paths provided.
+func hIndexStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idxState.mu.RLock()
+	running := idxState.Running
+	idxState.mu.RUnlock()
+
+	var body struct {
+		Paths []string `json:"paths"`
+		Force bool     `json:"force"`
+	}
+	if r.Method == http.MethodPost && r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+
+	seen := make(map[string]bool)
+	paths := make([]string, 0, len(body.Paths))
+	for _, p := range body.Paths {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+
+	// If no explicit paths were provided, index selected roots only.
+	if len(paths) == 0 {
+		for _, p := range getSelectedDriveRoots() {
+			if p == "" || seen[p] {
+				continue
+			}
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+
+	if len(paths) == 0 {
+		writeJSON(w, map[string]string{
+			"status": "no_paths",
+			"msg":    "No valid folders selected. Add a folder first.",
+		})
+		return
+	}
+
+	enqueueIndex(paths, body.Force)
+	if running || indexQueueLen() > 0 {
+		writeJSON(w, map[string]interface{}{"status": "queued", "paths": paths, "count": len(paths)})
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": "started", "paths": paths, "count": len(paths)})
+}
+
+// hDriveSelect persists selected scan roots from UI checkboxes.
+func hDriveSelect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, errJSON("invalid body"))
+		return
+	}
+	valid := make([]string, 0, len(body.Paths))
+	seen := make(map[string]bool)
+	for _, p := range body.Paths {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			seen[p] = true
+			valid = append(valid, p)
+		}
+	}
+	setSelectedDriveRoots(valid)
+	writeJSON(w, map[string]interface{}{"status": "ok", "selected": valid})
+}
 
 // ── GET /api/index/state/stream ───────────────────────────────────────────────
 func hIndexStateStream(w http.ResponseWriter, r *http.Request) {
@@ -83,9 +248,9 @@ func hIndexStateStream(w http.ResponseWriter, r *http.Request) {
 func hClear(w http.ResponseWriter, r *http.Request) {
 	// Step 1 — Signal the indexer to stop
 	idxState.mu.Lock()
-	idxState.Running    = false
+	idxState.Running = false
 	idxState.UserPaused = true
-	idxState.Status     = "Clearing data..."
+	idxState.Status = "Clearing data..."
 	idxState.mu.Unlock()
 
 	// Step 2 — Wait for indexer to actually stop (max 2s)
@@ -104,16 +269,16 @@ func hClear(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DB] Failed to clear designs: %v", err)
 		idxState.mu.Lock()
 		idxState.UserPaused = false
-		idxState.Status     = "Idle"
+		idxState.Status = "Idle"
 		idxState.mu.Unlock()
 		http.Error(w, "database busy, try again", 500)
 		return
 	}
-	
+
 	// Reset counters AFTER wiping
-	atomic.StoreInt32(&idxState.Progress,   0)
+	atomic.StoreInt32(&idxState.Progress, 0)
 	atomic.StoreInt32(&idxState.Discovered, 0)
-	atomic.StoreInt32(&idxState.Total,      0)
+	atomic.StoreInt32(&idxState.Total, 0)
 	idxState.mu.Lock()
 	idxState.ScanDone = false
 	idxState.mu.Unlock()
@@ -123,8 +288,8 @@ func hClear(w http.ResponseWriter, r *http.Request) {
 
 	// Step 5 — Reset state and notify SSE clients
 	idxState.mu.Lock()
-	idxState.UserPaused = false   // Allow auto-sync to restart on next cycle
-	idxState.Status     = "Idle"
+	idxState.UserPaused = false // Allow auto-sync to restart on next cycle
+	idxState.Status = "Idle"
 	idxState.mu.Unlock()
 
 	RefreshIdxStateCounts()
@@ -157,6 +322,24 @@ func hToggleSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"user_paused": paused})
 }
 
+// hStopAllIndexing force-stops active indexing and clears queued jobs.
+func hStopAllIndexing(w http.ResponseWriter, r *http.Request) {
+	idxState.mu.Lock()
+	wasRunning := idxState.Running
+	idxState.Running = false
+	idxState.UserPaused = true
+	idxState.Status = "Stopped by user"
+	idxState.mu.Unlock()
+
+	cleared := clearIndexQueue()
+	RefreshIdxStateCounts()
+	writeJSON(w, map[string]interface{}{
+		"status":        "stopped",
+		"was_running":   wasRunning,
+		"queue_cleared": cleared,
+	})
+}
+
 // hFolderList returns all indexed folders and their stats.
 func hFolderList(w http.ResponseWriter, r *http.Request) {
 	folders, err := dbLoadFolders()
@@ -183,10 +366,9 @@ func hFolderRescan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, errJSON("path required"))
 		return
 	}
-	
-	// Force scan the path
-	go StartIndexingMulti([]string{body.Path}, true)
-	
+
+	enqueueIndex([]string{body.Path}, true)
+
 	writeJSON(w, map[string]string{"status": "queued", "path": body.Path})
 }
 
@@ -194,13 +376,14 @@ func hFolderRescan(w http.ResponseWriter, r *http.Request) {
 // returns all detected drives/volumes with their EMB counts.
 func hDriveList(w http.ResponseWriter, r *http.Request) {
 	all := autoLibPaths()
-	
+
 	type driveInfo struct {
 		Path     string `json:"path"`
 		Label    string `json:"label"`
 		FSType   string `json:"fs_type,omitempty"`
 		Usable   bool   `json:"usable"`
 		Indexed  int    `json:"indexed"`
+		Selected bool   `json:"selected"`
 	}
 
 	infos := make([]driveInfo, 0, len(all))
@@ -208,17 +391,19 @@ func hDriveList(w http.ResponseWriter, r *http.Request) {
 		var n int
 		// Count designs under this drive prefix
 		db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path LIKE ?", d.Path+"/%").Scan(&n)
-		
+
 		infos = append(infos, driveInfo{
-			Path:    d.Path,
-			Label:   d.Label,
-			FSType:  d.FSType,
-			Usable:  usableDrive(d),
-			Indexed: n,
+			Path:     d.Path,
+			Label:    d.Label,
+			FSType:   d.FSType,
+			Usable:   usableDrive(d),
+			Indexed:  n,
+			Selected: isSelectedRoot(d.Path),
 		})
 	}
 	writeJSON(w, map[string]interface{}{"drives": infos})
 }
+
 // Hot path — optimized for minimal latency:
 //  1. Read uploaded bytes directly
 //  2. If .emb file: route through emb-engine for a visual preview first
@@ -275,7 +460,7 @@ func hSearch(w http.ResponseWriter, r *http.Request) {
 
 	// ── Embed query image ─────────────────────────────────────────────────────
 	var vecs [][]float32
-	
+
 	// Force python embedder so we get multi-crop + OpenAI weights
 	vecs, err = callEmbedImageMulti(imgBytes, header.Filename)
 	if err != nil {
@@ -286,10 +471,10 @@ func hSearch(w http.ResponseWriter, r *http.Request) {
 	// ── Search in-memory index ────────────────────────────────────────────────
 	// Filter: only return ".emb" files that have a valid visual render.
 	// We aggregate scores across all patches/crops using a majority vote strategy.
-	
+
 	scoreMap := make(map[string]float64)
 	bestResult := make(map[string]SearchResult)
-	
+
 	for _, v := range vecs {
 		// Search deep (1000) so we can accurately sum scores across all crops before truncating
 		results := globalIndex.Search(v, 1000, "emb")
@@ -302,18 +487,18 @@ func hSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	filtered := make([]SearchResult, 0, len(bestResult))
 	for id, r := range bestResult {
 		r.Score = scoreMap[id] // Updated aggregated score
 		filtered = append(filtered, r)
 	}
-	
+
 	// Sort aggregated results by score descending
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].Score > filtered[j].Score
 	})
-	
+
 	// Truncate to topK
 	if len(filtered) > topK {
 		filtered = filtered[:topK]
@@ -342,6 +527,7 @@ func hPreview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=604800") // 1 week
 	w.Write(png)
 }
+
 // ── GET /api/thumbnail/{id} ───────────────────────────────────────────────────
 func hThumbnail(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -361,7 +547,6 @@ func hThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Python embedder calls (used during indexing + search fallback) ────────────
-
 
 func callEmbedImageMulti(imgBytes []byte, name string) ([][]float32, error) {
 	atomic.AddInt32(&searchWaiters, 1)
@@ -540,16 +725,18 @@ func hOpenFile(w http.ResponseWriter, r *http.Request) {
 
 	dir := filepath.Dir(filePath)
 	var cmd *exec.Cmd
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
 	switch runtime.GOOS {
 	case "windows":
 		// Explorer highlights the specific file
-		cmd = exec.Command("explorer", "/select,"+filepath.ToSlash(filePath))
+		cmd = exec.CommandContext(ctx, "explorer", "/select,"+filepath.ToSlash(filePath))
 	case "darwin":
-		cmd = exec.Command("open", "-R", filePath)
+		cmd = exec.CommandContext(ctx, "open", "-R", filePath)
 	default: // linux
-		cmd = exec.Command("xdg-open", dir)
+		cmd = exec.CommandContext(ctx, "xdg-open", dir)
 	}
-	if err := cmd.Start(); err != nil {
+	if err := cmd.Run(); err != nil {
 		log.Printf("[OpenFile] Failed: %v", err)
 		writeJSON(w, errJSON("could not open folder: "+err.Error()))
 		return
