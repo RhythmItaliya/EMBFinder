@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // autoLibPaths returns auto-detected embroidery/image library paths.
@@ -47,6 +48,67 @@ type DriveEntry struct {
 	Label  string `json:"label"`
 	FSType string `json:"fs_type,omitempty"`
 	Free   int64  `json:"free_mb,omitempty"`
+}
+
+var (
+	selectedDriveMu sync.RWMutex
+	selectedDrives  = map[string]bool{}
+)
+
+func initSelectedDrives() {
+	selectedDriveMu.Lock()
+	defer selectedDriveMu.Unlock()
+	for _, d := range autoLibPaths() {
+		if usableDrive(d) {
+			if _, ok := selectedDrives[d.Path]; !ok {
+				selectedDrives[d.Path] = true
+			}
+		}
+	}
+}
+
+func isSelectedPath(path string) bool {
+	selectedDriveMu.RLock()
+	defer selectedDriveMu.RUnlock()
+	for p, enabled := range selectedDrives {
+		if !enabled {
+			continue
+		}
+		if path == p || strings.HasPrefix(path, p+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func getSelectedDriveRoots() []string {
+	selectedDriveMu.RLock()
+	defer selectedDriveMu.RUnlock()
+	out := make([]string, 0, len(selectedDrives))
+	for p, enabled := range selectedDrives {
+		if enabled {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func setSelectedDriveRoots(paths []string) {
+	selectedDriveMu.Lock()
+	defer selectedDriveMu.Unlock()
+	selectedDrives = map[string]bool{}
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			selectedDrives[p] = true
+		}
+	}
+}
+
+func isSelectedRoot(root string) bool {
+	selectedDriveMu.RLock()
+	defer selectedDriveMu.RUnlock()
+	return selectedDrives[root]
 }
 
 // ── Linux: read /proc/mounts ──────────────────────────────────────────────────
