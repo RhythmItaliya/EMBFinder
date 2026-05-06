@@ -179,13 +179,9 @@ func (idx *Index) Search(query []float32, k int, formatFilter string) []SearchRe
 			heap.Init(&h)
 
 			for i := lo; i < hi; i++ {
-				// Score = max(render_score, sidecar_score)
 				score := dot(query, snap[i].Vector)
-				if len(snap[i].SidecarVector) > 0 {
-					if sc := dot(query, snap[i].SidecarVector); sc > score {
-						score = sc
-					}
-				}
+				// DISABLED: Sidecar matching disabled to prevent false positives from unrelated identically named files.
+				// if len(snap[i].SidecarVector) > 0 { ... }
 
 				if h.Len() < k {
 					heap.Push(&h, scored{snap[i], score})

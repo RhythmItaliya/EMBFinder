@@ -804,25 +804,9 @@ func findSidecar(embPath string) string {
 }
 
 // findAllSidecars returns ALL matching sidecar image files (jpg, jpeg, png) for an EMB.
-// This allows embedding multiple garment photos of the same design into one averaged vector.
+// DISABLED: User has many unrelated images sharing the same name as .emb files, causing false positives.
 func findAllSidecars(embPath string) []string {
-	dir := filepath.Dir(embPath)
-	base := strings.TrimSuffix(filepath.Base(embPath), filepath.Ext(embPath))
-
-	var found []string
-	seen := make(map[string]bool)
-	for _, ext := range []string{".jpg", ".JPG", ".jpeg", ".JPEG", ".png", ".PNG"} {
-		side := filepath.Join(dir, base+ext)
-		if _, err := os.Stat(side); err == nil {
-			// Deduplicate case-insensitive on same base name
-			key := strings.ToLower(side)
-			if !seen[key] {
-				seen[key] = true
-				found = append(found, side)
-			}
-		}
-	}
-	return found
+	return nil
 }
 
 func interruptibleSleep(d time.Duration) {
