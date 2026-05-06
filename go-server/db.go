@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -310,10 +311,22 @@ type FolderStats struct {
 func dbSaveFolder(s FolderStats) {
 	writeMu.Lock()
 	defer writeMu.Unlock()
-	
+
+	var existingStatus string
+	var existingIndexed int
+	_ = db.QueryRow("SELECT status, indexed_files FROM folders WHERE path=?", s.Path).Scan(&existingStatus, &existingIndexed)
+
 	// If total_files is 0, try to preserve existing value
 	if s.TotalFiles == 0 {
 		db.QueryRow("SELECT total_files FROM folders WHERE path=?", s.Path).Scan(&s.TotalFiles)
+	}
+	// Never downgrade known indexed progress.
+	if existingIndexed > s.IndexedFiles {
+		s.IndexedFiles = existingIndexed
+	}
+	// Discovery should not overwrite active/completed scan status.
+	if strings.EqualFold(s.Status, "Scouting...") && existingStatus != "" && !strings.EqualFold(existingStatus, "Scouting...") {
+		s.Status = existingStatus
 	}
 
 	db.Exec(`INSERT INTO folders(path, name, total_files, indexed_files, last_file, status, needs_rescan, last_scan, updated_at)
@@ -355,4 +368,29 @@ func dbSetFolderStatus(path string, status string) {
 	writeMu.Lock()
 	defer writeMu.Unlock()
 	db.Exec("UPDATE folders SET status=?, updated_at=strftime('%s','now') WHERE path=?", status, path)
+}
+
+// dbRefreshFolderStatsForPath refreshes indexed_files for every folder that
+// could contain the given file path.
+func dbRefreshFolderStatsForPath(filePath string) {
+	if filePath == "" {
+		return
+	}
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	db.Exec(`
+		UPDATE folders
+		   SET indexed_files = (
+		     SELECT COUNT(*) FROM designs d
+		      WHERE d.file_path = folders.path OR d.file_path LIKE folders.path || '/%'
+		   ),
+		       updated_at = strftime('%s','now')
+		 WHERE ? = folders.path OR ? LIKE folders.path || '/%'`,
+		filePath, filePath)
+}
+
+func dbHasPath(path string) bool {
+	var n int
+	_ = db.QueryRow("SELECT COUNT(*) FROM designs WHERE file_path=?", path).Scan(&n)
+	return n > 0
 }
