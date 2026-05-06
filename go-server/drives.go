@@ -58,6 +58,19 @@ var (
 func initSelectedDrives() {
 	selectedDriveMu.Lock()
 	defer selectedDriveMu.Unlock()
+	if extra := strings.TrimSpace(os.Getenv("EMBFIND_EXTRA_DRIVES")); extra != "" {
+		selectedDrives = map[string]bool{}
+		for _, p := range strings.Split(extra, ";") {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				selectedDrives[p] = true
+			}
+		}
+		return
+	}
 	for _, d := range autoLibPaths() {
 		if usableDrive(d) {
 			if _, ok := selectedDrives[d.Path]; !ok {
@@ -103,6 +116,20 @@ func setSelectedDriveRoots(paths []string) {
 			selectedDrives[p] = true
 		}
 	}
+}
+
+func addSelectedDriveRoot(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	selectedDriveMu.Lock()
+	defer selectedDriveMu.Unlock()
+	if selectedDrives[path] {
+		return false
+	}
+	selectedDrives[path] = true
+	return true
 }
 
 func isSelectedRoot(root string) bool {

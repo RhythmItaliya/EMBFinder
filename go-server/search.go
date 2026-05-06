@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"container/heap"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -32,7 +31,9 @@ func (idx *Index) Has(id string) bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	for _, e := range idx.entries {
-		if e.ID == id { return true }
+		if e.ID == id {
+			return true
+		}
 	}
 	return false
 }
@@ -140,7 +141,7 @@ func (idx *Index) Search(query []float32, k int, formatFilter string) []SearchRe
 	}
 
 	// ── 2. Worker count: use all but one CPU core ─────────────────────────────
-	workers := runtime.NumCPU() - 1
+	workers := getSearchWorkers()
 	if workers < 1 {
 		workers = 1
 	}
