@@ -40,5 +40,6 @@ const API = (() => {
     // Open TrueSizer / folder — return promises for spinner integration
     openTrueSizer: (payload) => _req('POST', '/api/open-truesizer', JSON.stringify(payload), true),
     openFolder:    (payload) => _req('POST', '/api/open-file',      JSON.stringify(payload), true),
+    stopAllIndex:  ()        => _req('POST', '/api/index/stop-all', '{}', true),
   };
 })();
