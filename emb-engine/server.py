@@ -27,7 +27,7 @@ Endpoints:
   POST /open               — open .EMB in TrueSizer GUI (interactive)
   POST /render-truesizer   — on-demand TrueSizer render of one file
 """
-import os, base64, struct, zlib, io
+import os, base64, struct, zlib, io, time
 from pathlib import Path
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
@@ -72,6 +72,10 @@ if _HAS_TRUESIZER:
     print(f"[EmbEngine] ✓ TrueSizer GUI ready  ({TRUESIZER_EXE})  [on-demand only]")
 else:
     print("[EmbEngine] TrueSizer not available — /open and /render-truesizer disabled")
+
+# Track the last launched TrueSizer process so opening a new design can
+# replace stale/older windows more reliably.
+_LAST_TS_PROC = None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -176,8 +180,30 @@ def open_design():
     if not file_path or not Path(file_path).exists():
         return jsonify({"error": "file not found"}), 404
 
+    global _LAST_TS_PROC
+
+    # If previous TrueSizer process is still alive, terminate it first so the
+    # new request consistently opens the requested design.
+    try:
+        if _LAST_TS_PROC is not None and _LAST_TS_PROC.poll() is None:
+            _LAST_TS_PROC.terminate()
+            for _ in range(10):
+                if _LAST_TS_PROC.poll() is not None:
+                    break
+                time.sleep(0.1)
+            if _LAST_TS_PROC.poll() is None:
+                _LAST_TS_PROC.kill()
+    except Exception:
+        pass
+
     proc = _ts_open(file_path)
     if proc:
+        _LAST_TS_PROC = proc
+        # Wait briefly for startup; if process exits immediately, report failure.
+        time.sleep(1.2)
+        code = proc.poll()
+        if code is not None and code != 0:
+            return jsonify({"error": f"TrueSizer exited early (code {code})"}), 500
         return jsonify({
             "status": "opened",
             "pid":    proc.pid,

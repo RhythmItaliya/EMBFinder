@@ -42,26 +42,88 @@ The service listens on **port 8767**.
 
 ## API Endpoints
 
-| Method | Endpoint | Body | Returns | Description |
-|--------|----------|------|---------|-------------|
-| `POST` | `/render` | `multipart`: `file` (EMB bytes) | PNG image | Render `.EMB` to PNG |
-| `GET` | `/health` | — | Status JSON | Active strategies, renderer info |
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/preview` | Render `.EMB` → PNG via fast OLE2 binary extraction (bulk indexing) |
+| `POST` | `/info` | Extract stitch/color/trim metadata from `.EMB` |
+| `POST` | `/render-truesizer` | On-demand TrueSizer GUI render (per-file, ~15-30s latency) |
+| `POST` | `/open` | Open `.EMB` in TrueSizer GUI for interactive inspection (non-blocking) |
+| `GET` | `/health` | Service status with active rendering strategies |
 
-### `/health` Response
+### Rendering Strategy Details
 
+**Bulk Path (for indexing):**
+1. **`POST /preview`** — OLE2 binary extraction → PyEmbroidery render → placeholder
+   - ~5ms per file (no Wine required)
+   - Used during full-library indexing
+   - Returns PNG base64
+
+**On-Demand Path (for search results):**
+2. **`POST /render-truesizer`** — Live TrueSizer GUI render
+   - ~15-30 seconds per file (launches Wine desktop)
+   - Used only for specific files user is inspecting
+   - Returns PNG base64 + metadata
+
+3. **`POST /open`** — Interactive TrueSizer session
+   - Non-blocking — TrueSizer stays open for user interaction
+   - Returns status JSON with PID
+
+### Response Formats
+
+**`/preview` and `/render-truesizer`:**
+```json
+{
+  "png_b64": "iVBORw0KGgoAAAANS...",
+  "engine": "ole2" | "pyembroidery" | "truesizer" | "placeholder"
+}
+```
+
+**`/info`:**
+```json
+{
+  "file_path": "/path/to/design.emb",
+  "file_size_kb": 45.3,
+  "stitch_count": 1234,
+  "trim_count": 5,
+  "color_count": 8,
+  "source": "pyembroidery"
+}
+```
+
+**`/health`:**
 ```json
 {
   "status": "ok",
+  "bulk_renderer": "ole2_binary",
+  "bulk_renderer_ready": true,
+  "pyembroidery_fallback": true,
+  "truesizer_available": false,
+  "truesizer_exe": null,
+  "wine_prefix": null,
   "active_strategies": ["ole2", "pyembroidery", "placeholder"],
-  "native_renderer": true,
-  "pyembroidery_renderer": true,
   "render_size": 512
 }
 ```
 
 ---
 
-## Render Enhancement
+## Architecture Rationale
+
+**Why OLE2 + PyEmbroidery for bulk indexing?**
+
+For 100k+ file scale, TrueSizer GUI rendering is prohibitively expensive:
+- TrueSizer launch: ~15 seconds per file
+- 100k files × 15s = **17 days of continuous processing** ← not viable
+
+The OLE2 + PyEmbroidery strategy completes in minutes:
+- 100k files × ~5ms = **8 minutes** ← production-grade
+
+**The key insight:** Wilcom stores a pre-rendered thumbnail inside every `.EMB` file as the `DESIGN_ICON` OLE2 stream. This is the exact render TrueSizer would produce. We extract it directly from the binary — no Wine, no GUI, millisecond latency.
+
+**When to use TrueSizer (`/render-truesizer` or `/open`):**
+- User is viewing search results and wants the best-quality render
+- User needs to inspect design details interactively
+- Acceptable latency: 15-30 seconds (one file at a time)
 
 `emb_renderer.py` applies post-processing to synthetic renders to reduce the domain gap with real garment photography:
 
