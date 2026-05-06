@@ -1,299 +1,321 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EMBFinder — Embroidery Visual Search</title>
   <meta name="description" content="Local-first AI visual search for Wilcom EMB embroidery files.">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@500&display=swap"
+    rel="stylesheet">
 </head>
+
 <body>
 
-<div class="app">
+  <div class="app">
 
-  <!-- ── Header ─────────────────────────────────────────────────────────── -->
-  <header class="header">
-    <div class="header__brand">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="1.5"/>
-        <path d="M8 12 Q12 6 16 12 Q12 18 8 12Z" fill="#2563eb" opacity=".7"/>
-        <circle cx="12" cy="12" r="2" fill="#2563eb"/>
-      </svg>
-      <span class="header__logo">EMBFind<em>er</em></span>
-      <div class="dot" id="dot"></div>
-      <div class="header__stats" id="globalStats">
-        <span class="status-txt" id="statusTxt">Connecting…</span>
-        <span class="sep">|</span>
-        <span class="stats-item"><strong id="globalIndexed">0</strong> designs indexed</span>
-      </div>
-    </div>
-
-    <nav class="tab-nav">
-      <button class="tab-btn tab-btn--active" id="tabSearch">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        Visual Search
-      </button>
-      <button class="tab-btn" id="tabLibrary">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        EMB Library
-      </button>
-      <button class="tab-btn" id="tabFolders">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        Indexed Folders
-      </button>
-    </nav>
-
-    <div class="header__actions">
-      <button class="btn btn--outline btn--sm" id="refreshBtn">Refresh</button>
-      <button class="btn btn--outline btn--sm" id="syncToggleBtn">
-        <span id="syncToggleText">Stop Sync</span>
-      </button>
-      <button class="btn btn--danger btn--sm" id="clearBtn">Clear Data</button>
-    </div>
-  </header>
-
-  <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
-  <aside class="sidebar">
-    <div class="sidebar__scroll-area">
-
-      <section>
-        <div class="section-label">Drives &amp; Volumes</div>
-        <div id="driveList" class="drive-list">
-          <div class="loading-placeholder">
-            <div class="pulse-circle"></div>
-            <div class="txt-11">Detecting drives…</div>
-          </div>
-        </div>
-      </section>
-
-      <section id="progressWrap" class="hidden">
-        <div class="section-label">Indexing Progress</div>
-        <div class="progress">
-          <div class="progress__meta">
-            <span id="progLabel">Syncing…</span>
-            <span id="progCount" class="txt-mono">0 / 0 files</span>
-          </div>
-          <div class="progress__track"><div class="progress__fill" id="progFill"></div></div>
-        </div>
-      </section>
-
-        <div id="formatCounts" class="stats-wrap">
-          <div class="loading-placeholder">
-            <div class="pulse-circle"></div>
-            <div class="txt-11">Waiting for sync…</div>
-          </div>
-        </div>
-      </section>
-
-    </div>
-  </aside>
-
-  <!-- ════════ VISUAL SEARCH TAB ══════════════════════════════════════════ -->
-  <main class="main" id="panelSearch">
-    <div class="search-bar">
-      <div class="drop-zone" id="dropZone">
-        <input type="file" id="fileInput" accept="image/*,.emb,.EMB" hidden>
-
-        <div class="dz-empty" id="dzEmpty">
-          <div class="dz-icon">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-          </div>
-          <div class="dz-title">Drop an Image or .EMB File Here</div>
-          <div class="dz-sub">JPG · PNG · WEBP · EMB — AI finds visually matching embroidery designs</div>
-        </div>
-
-        <div class="dz-preview" id="dzPreview">
-          <img id="previewThumb" class="dz-preview__thumb" src="" alt="preview">
-          <div class="dz-preview__info">
-            <div id="previewName" class="preview-name">image.jpg</div>
-            <div class="txt-sm txt-muted" id="previewType">Ready to search</div>
-          </div>
-          <button class="btn-icon" id="clearFileBtn" title="Remove file">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <button class="btn btn--primary btn--full" id="searchBtn" disabled>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+    <!-- ── Header ─────────────────────────────────────────────────────────── -->
+    <header class="header">
+      <div class="header__brand">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="1.5" />
+          <path d="M8 12 Q12 6 16 12 Q12 18 8 12Z" fill="#2563eb" opacity=".7" />
+          <circle cx="12" cy="12" r="2" fill="#2563eb" />
         </svg>
-        Search Library
-      </button>
-    </div>
-
-    <!-- searching indicator -->
-    <div class="searching-bar" id="searchingBar">
-      <div class="dot dot--pulse"></div>
-      Searching library with AI…
-    </div>
-
-    <!-- results header -->
-    <div class="results-bar" id="resultsBar" style="display:none">
-      <div id="resultsTitle"></div>
-      <div id="searchTime" class="txt-mono txt-11 txt-muted"></div>
-    </div>
-
-    <!-- results grid -->
-    <div class="grid-wrap" id="searchGridWrap" style="display:none">
-      <div class="grid" id="resultsGrid"></div>
-    </div>
-
-    <!-- empty state -->
-    <div class="search-empty-state" id="searchEmptyState">
-      <div class="empty-icon">
-        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-        </svg>
-      </div>
-      <div class="empty-title">Upload an image to find matching EMB designs</div>
-      <div class="empty-sub">
-        Supports JPG, PNG, WEBP photos and .EMB files<br>
-        The AI will find visually similar designs from your library
-      </div>
-    </div>
-  </main>
-
-  <!-- ════════ LIBRARY TAB ════════════════════════════════════════════════ -->
-  <main class="main hidden" id="panelLibrary">
-    <div class="lib-toolbar">
-      <div class="lib-search-wrap">
-        <svg class="lib-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-        </svg>
-        <input type="text" id="libSearchInput" class="lib-search" placeholder="Filter by name…" autocomplete="off">
-      </div>
-      <span id="libCount" class="txt-sm txt-muted"></span>
-    </div>
-    <div class="grid-wrap">
-      <div class="grid" id="libGrid"></div>
-      <div class="lib-pagination" id="libPagination"></div>
-    </div>
-  </main>
-
-  <!-- ════════ FOLDERS TAB ════════════════════════════════════════════════ -->
-  <main class="main hidden" id="panelFolders">
-    <div class="folders-header">
-      <div class="header-main">
-      <div class="header-main__title">
-        <h1>Folder Management</h1>
-        <p class="txt-muted">Manage independent embroidery collections. AI search only searches indexed folders.</p>
-      </div>
-      <div id="folderSummary" class="folder-summary">
-        <span id="folderTotalCount">0 folders discovered</span>
-        <span class="dot">·</span>
-        <span id="folderIndexedCount">0 indexed</span>
-      </div>
-    </div>
-    </div>
-    
-    <div class="folder-grid" id="folderGrid">
-      <!-- populated by js -->
-    </div>
-  </main>
-
-</div><!-- /.app -->
-
-<!-- ════════ EMB VIEWER MODAL ══════════════════════════════════════════ -->
-<div class="modal-bg" id="modalBg">
-  <div class="modal">
-    <button class="modal__close" id="modalCloseBtn" aria-label="Close">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-
-    <div class="modal__layout">
-
-      <!-- LEFT: EMB Render — dark embroidery viewer -->
-      <div class="modal__render-pane">
-        <div class="pane-label">
-          <span>Embroidery Render</span>
-          <span class="match-badge" id="matchBadge" style="display:none"></span>
+        <span class="header__logo">EMBFind<em>er</em></span>
+        <div class="dot" id="dot"></div>
+        <div class="header__stats" id="globalStats">
+          <span class="status-txt" id="statusTxt">Connecting…</span>
+          <span class="sep">|</span>
+          <span class="stats-item"><strong id="globalIndexed">0</strong> designs indexed</span>
         </div>
-        <div class="emb-viewer" id="embViewer">
-          <div class="emb-viewer__bg">
-            <div class="emb-viewer__fabric"></div>
-            <img id="modalRender" class="emb-viewer__img" src="" alt="EMB render"
-                 onload="this.classList.add('loaded')"
-                 onerror="document.getElementById('embViewer').classList.add('no-render')">
-            <div class="emb-viewer__no-render">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-              </svg>
-              <span>No Render Available</span>
+      </div>
+
+      <nav class="tab-nav">
+        <button class="tab-btn tab-btn--active" id="tabSearch">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          Visual Search
+        </button>
+        <button class="tab-btn" id="tabLibrary">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+          </svg>
+          EMB Library
+        </button>
+        <button class="tab-btn" id="tabFolders">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          Indexed Folders
+        </button>
+      </nav>
+
+      <div class="header__actions">
+        <button class="btn btn--outline btn--sm" id="refreshBtn">Refresh</button>
+        <button class="btn btn--outline btn--sm" id="syncToggleBtn">
+          <span id="syncToggleText">Stop Sync</span>
+        </button>
+        <button class="btn btn--danger btn--sm" id="clearBtn">Clear Data</button>
+      </div>
+    </header>
+
+    <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar__scroll-area">
+
+        <section>
+          <div class="section-label">Drives &amp; Volumes</div>
+          <div id="driveList" class="drive-list">
+            <div class="loading-placeholder">
+              <div class="pulse-circle"></div>
+              <div class="txt-11">Detecting drives…</div>
             </div>
           </div>
-          <!-- Zoom controls -->
-          <div class="emb-viewer__controls">
-            <button class="viewer-btn" onclick="ModalController.zoom(1.2)" title="Zoom in">+</button>
-            <button class="viewer-btn" onclick="ModalController.zoom(1)"   title="Reset">⊙</button>
-            <button class="viewer-btn" onclick="ModalController.zoom(0.8)" title="Zoom out">−</button>
+        </section>
+
+        <section id="progressWrap" class="hidden">
+          <div class="section-label">Indexing Progress</div>
+          <div class="progress">
+            <div class="progress__meta">
+              <span id="progLabel">Syncing…</span>
+              <span id="progCount" class="txt-mono">0 / 0 files</span>
+            </div>
+            <div class="progress__track">
+              <div class="progress__fill" id="progFill"></div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-label">Index Summary</div>
+          <div id="formatCounts" class="stats-wrap">
+            <div class="loading-placeholder">
+              <div class="pulse-circle"></div>
+              <div class="txt-11">Waiting for sync…</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </aside>
+
+    <!-- ════════ VISUAL SEARCH TAB ══════════════════════════════════════════ -->
+    <main class="main" id="panelSearch">
+      <div class="search-bar">
+        <div class="drop-zone" id="dropZone">
+          <input type="file" id="fileInput" accept="image/*,.emb,.EMB" hidden>
+
+          <div class="dz-empty" id="dzEmpty">
+            <div class="dz-icon">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <div class="dz-title">Drop an Image or .EMB File Here</div>
+            <div class="dz-sub">JPG · PNG · WEBP · EMB — AI finds visually matching embroidery designs</div>
+          </div>
+
+          <div class="dz-preview" id="dzPreview">
+            <img id="previewThumb" class="dz-preview__thumb" src="" alt="preview">
+            <div class="dz-preview__info">
+              <div id="previewName" class="preview-name">image.jpg</div>
+              <div class="txt-sm txt-muted" id="previewType">Ready to search</div>
+            </div>
+            <button class="btn-icon" id="clearFileBtn" title="Remove file">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button class="btn btn--primary btn--full" id="searchBtn" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          Search Library
+        </button>
+      </div>
+
+      <!-- searching indicator -->
+      <div class="searching-bar" id="searchingBar">
+        <div class="dot dot--pulse"></div>
+        Searching library with AI…
+      </div>
+
+      <!-- results header -->
+      <div class="results-bar" id="resultsBar" style="display:none">
+        <div id="resultsTitle"></div>
+        <div id="searchTime" class="txt-mono txt-11 txt-muted"></div>
+      </div>
+
+      <!-- results grid -->
+      <div class="grid-wrap" id="searchGridWrap" style="display:none">
+        <div class="grid" id="resultsGrid"></div>
+      </div>
+
+      <!-- empty state -->
+      <div class="search-empty-state" id="searchEmptyState">
+        <div class="empty-icon">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+        </div>
+        <div class="empty-title">Upload an image to find matching EMB designs</div>
+        <div class="empty-sub">
+          Supports JPG, PNG, WEBP photos and .EMB files<br>
+          The AI will find visually similar designs from your library
+        </div>
+      </div>
+    </main>
+
+    <!-- ════════ LIBRARY TAB ════════════════════════════════════════════════ -->
+    <main class="main hidden" id="panelLibrary">
+      <div class="lib-toolbar">
+        <div class="lib-search-wrap">
+          <svg class="lib-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2.5">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <input type="text" id="libSearchInput" class="lib-search" placeholder="Filter by name…" autocomplete="off">
+        </div>
+        <span id="libCount" class="txt-sm txt-muted"></span>
+      </div>
+      <div class="grid-wrap">
+        <div class="grid" id="libGrid"></div>
+        <div class="lib-pagination" id="libPagination"></div>
+      </div>
+    </main>
+
+    <!-- ════════ FOLDERS TAB ════════════════════════════════════════════════ -->
+    <main class="main hidden" id="panelFolders">
+      <div class="folders-header">
+        <div class="header-main">
+          <div class="folders-actions">
+            <button class="btn btn--outline" id="scanAllBtn">Scan All</button>
+            <button class="btn btn--primary" id="addFolderBtn">Add Folder</button>
+          </div>
+          <div id="folderSummary" class="folder-summary">
+            <span id="folderTotalCount">0 folders discovered</span>
+            <span class="dot">·</span>
+            <span id="folderIndexedCount">0 indexed</span>
           </div>
         </div>
       </div>
 
-      <!-- RIGHT: File info + actions -->
-      <div class="modal__info-pane">
-        <div class="modal__file-header">
-          <div class="modal__file-name" id="modalTitle">Design.EMB</div>
-          <div class="modal__folder txt-11 txt-muted" id="modalFolder"></div>
-          <div class="modal__file-path" id="modalPath"></div>
-        </div>
-
-        <div class="modal-actions">
-          <button class="btn btn--wilcom btn--full" id="openTruesizerBtn"
-                  onclick="ModalController.openInTrueSizer()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/>
-              <path d="M8 2v16M16 6v16"/>
-            </svg>
-            Open in TrueSizer
-          </button>
-          <button class="btn btn--primary btn--full" id="openFolderBtn"
-                  onclick="ModalController.openFolder()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-            Open Folder
-          </button>
-          <button class="btn btn--outline btn--full" id="copyPathBtn"
-                  onclick="ModalController.copyPath()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>
-            Copy Path
-          </button>
-        </div>
+      <div class="folder-grid" id="folderGrid">
+        <!-- populated by js -->
       </div>
+    </main>
 
+  </div><!-- /.app -->
+
+  <!-- ════════ EMB VIEWER MODAL ══════════════════════════════════════════ -->
+  <div class="modal-bg" id="modalBg">
+    <div class="modal">
+      <button class="modal__close" id="modalCloseBtn" aria-label="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+
+      <div class="modal__layout">
+
+        <!-- LEFT: EMB Render — dark embroidery viewer -->
+        <div class="modal__render-pane">
+          <div class="pane-label">
+            <span>Embroidery Render</span>
+            <span class="match-badge" id="matchBadge" style="display:none"></span>
+          </div>
+          <div class="emb-viewer" id="embViewer">
+            <div class="emb-viewer__bg">
+              <div class="emb-viewer__fabric"></div>
+              <img id="modalRender" class="emb-viewer__img" src="" alt="EMB render"
+                onload="this.classList.add('loaded')"
+                onerror="document.getElementById('embViewer').classList.add('no-render')">
+              <div class="emb-viewer__no-render">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <span>No Render Available</span>
+              </div>
+            </div>
+            <!-- Zoom controls -->
+            <div class="emb-viewer__controls">
+              <button class="viewer-btn" onclick="ModalController.zoom(1.2)" title="Zoom in">+</button>
+              <button class="viewer-btn" onclick="ModalController.zoom(1)" title="Reset">⊙</button>
+              <button class="viewer-btn" onclick="ModalController.zoom(0.8)" title="Zoom out">−</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: File info + actions -->
+        <div class="modal__info-pane">
+          <div class="modal__file-header">
+            <div class="modal__file-name" id="modalTitle">Design.EMB</div>
+            <div class="modal__folder txt-11 txt-muted" id="modalFolder"></div>
+            <div class="modal__file-path" id="modalPath"></div>
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn btn--wilcom btn--full" id="openTruesizerBtn" onclick="ModalController.openInTrueSizer()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z" />
+                <path d="M8 2v16M16 6v16" />
+              </svg>
+              Open in TrueSizer
+            </button>
+            <button class="btn btn--primary btn--full" id="openFolderBtn" onclick="ModalController.openFolder()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              Open Folder
+            </button>
+            <button class="btn btn--outline btn--full" id="copyPathBtn" onclick="ModalController.copyPath()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+              Copy Path
+            </button>
+          </div>
+        </div>
+
+      </div>
     </div>
   </div>
-</div>
 
-<div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden"></div>
 
-<script src="config.js"></script>
-<script src="api.js"></script>
-<script src="controllers.js"></script>
-<script src="app.js"></script>
+  <script src="config.js"></script>
+  <script src="api.js"></script>
+  <script src="controllers.js"></script>
+  <script src="app.js"></script>
 
 
   <!-- Global Drop Overlay -->
   <div id="globalDropZone" class="global-drop hidden">
     <div class="global-drop__content">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
       </svg>
       <h2>Drop Image to Search</h2>
     </div>
