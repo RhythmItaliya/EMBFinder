@@ -845,29 +845,27 @@ func hOpenFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var cmd *exec.Cmd
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
 
 	switch runtime.GOOS {
 	case "windows":
 		if err == nil && !st.IsDir() {
 			// Explorer highlights the specific file
-			cmd = exec.CommandContext(ctx, "explorer", "/select,"+filepath.ToSlash(filePath))
+			cmd = exec.Command("explorer", "/select,"+filepath.ToSlash(filePath))
 		} else {
-			cmd = exec.CommandContext(ctx, "explorer", filepath.ToSlash(dir))
+			cmd = exec.Command("explorer", filepath.ToSlash(dir))
 		}
 	case "darwin":
 		if err == nil && !st.IsDir() {
-			cmd = exec.CommandContext(ctx, "open", "-R", filePath)
+			cmd = exec.Command("open", "-R", filePath)
 		} else {
-			cmd = exec.CommandContext(ctx, "open", dir)
+			cmd = exec.Command("open", dir)
 		}
 	default: // linux
 		highlightPath := ""
 		if err == nil && !st.IsDir() {
 			highlightPath = filePath
 		}
-		if err := openFolderLinux(ctx, dir, highlightPath); err != nil {
+		if err := openFolderLinux(dir, highlightPath); err != nil {
 			log.Printf("[OpenFile] Failed: %v", err)
 			writeJSON(w, errJSON("could not open folder: "+err.Error()))
 			return
@@ -875,7 +873,7 @@ func hOpenFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok", "path": dir})
 		return
 	}
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
 		log.Printf("[OpenFile] Failed: %v", err)
 		writeJSON(w, errJSON("could not open folder: "+err.Error()))
 		return
@@ -884,21 +882,30 @@ func hOpenFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // openFolderLinux opens dir in a file manager, trying to SELECT filePath if non-empty.
-func openFolderLinux(ctx context.Context, dir, filePath string) error {
+func openFolderLinux(dir, filePath string) error {
 	// Managers that support file-selection / highlighting
 	if filePath != "" {
+		// 1. Try universal D-Bus standard first (works on Ubuntu/Gnome, KDE, Mint, etc.)
+		uri := "file://" + filePath
+		if err := exec.Command("dbus-send", "--session", "--dest=org.freedesktop.FileManager1", 
+			"--type=method_call", "/org/freedesktop/FileManager1", 
+			"org.freedesktop.FileManager1.ShowItems", "array:string:"+uri, "string:").Start(); err == nil {
+			return nil
+		}
+		
+		// 2. Direct CLI fallbacks
 		if _, err := exec.LookPath("nautilus"); err == nil {
-			if e := exec.CommandContext(ctx, "nautilus", "--select", filePath).Start(); e == nil {
+			if e := exec.Command("nautilus", "--select", filePath).Start(); e == nil {
 				return nil
 			}
 		}
 		if _, err := exec.LookPath("nemo"); err == nil {
-			if e := exec.CommandContext(ctx, "nemo", filePath).Start(); e == nil {
+			if e := exec.Command("nemo", filePath).Start(); e == nil {
 				return nil
 			}
 		}
 		if _, err := exec.LookPath("dolphin"); err == nil {
-			if e := exec.CommandContext(ctx, "dolphin", "--select", filePath).Start(); e == nil {
+			if e := exec.Command("dolphin", "--select", filePath).Start(); e == nil {
 				return nil
 			}
 		}
@@ -913,7 +920,7 @@ func openFolderLinux(ctx context.Context, dir, filePath string) error {
 	}
 	for _, c := range candidates {
 		if _, err := exec.LookPath(c[0]); err == nil {
-			return exec.CommandContext(ctx, c[0], c[1:]...).Start()
+			return exec.Command(c[0], c[1:]...).Start()
 		}
 	}
 	return errors.New("no file manager found")
