@@ -395,8 +395,8 @@ func resizeForPreview(b []byte) []byte {
 
 // numIndexWorkers returns an optimal worker count (2-8).
 func numIndexWorkers() int {
-	if Config.IndexWorkers > 0 {
-		return Config.IndexWorkers
+	if w := getIndexWorkers(); w > 0 {
+		return w
 	}
 	w := runtime.NumCPU() - 1
 	if w < 1 {
@@ -847,7 +847,16 @@ func AutoIndexAllDrives() {
 		// Periodic global discovery (every 30 mins or on start)
 		go func() {
 			log.Printf("[Discovery] Starting global EMB scouting...")
+			selected := getSelectedDriveRoots()
 			drives := autoLibPaths()
+			if len(selected) > 0 {
+				drives = make([]DriveEntry, 0, len(selected))
+				for _, p := range selected {
+					if st, err := os.Stat(p); err == nil && st.IsDir() {
+						drives = append(drives, DriveEntry{Path: p, Label: driveLabel(p)})
+					}
+				}
+			}
 			extraPaths := os.Getenv("EMBFIND_EXTRA_DRIVES")
 			extraRoots := make([]string, 0)
 			for _, ep := range strings.Split(extraPaths, ";") {
@@ -928,15 +937,19 @@ func AutoIndexAllDrives() {
 
 			log.Printf("[Discovery] Found %d designs in %d folders", globalTotal, len(discoveredFolders))
 
-			// Upsert discovered folders into the database
+			// Upsert discovered folders — use "Scouting..." so dbSaveFolder
+			// preserves any real scan state (Completed/In Progress/Stopped).
 			for path, count := range discoveredFolders {
 				dbSaveFolder(FolderStats{
 					Path:       path,
 					Name:       filepath.Base(path),
 					TotalFiles: count,
-					Status:     "Pending",
+					Status:     "Scouting...",
 				})
 			}
+
+			// Recalculate indexed_files for every folder from real DB data.
+			dbRecalcAllFolderCounts()
 
 			idxState.mu.Lock()
 			idxState.Total = globalTotal

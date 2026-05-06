@@ -23,13 +23,14 @@ var (
 // Called by both desktop and headless main().
 func startCore() {
 	log.Printf("[Core] EMBFinder %s (built %s)", version, buildDate)
+	initPerfManager()
 
 	// ── Database ─────────────────────────────────────────────────────────────
 	if err := initDB(Config.DBPath); err != nil {
 		log.Fatalf("[DB] Init failed: %v", err)
 	}
 	log.Printf("[DB] Path: %s", Config.DBPath)
-	RefreshIdxStateCounts()
+	dbStartupCleanup() 
 
 	// ── Load index from DB into memory ───────────────────────────────────────
 	entries, _ := dbLoadAll()
@@ -37,6 +38,9 @@ func startCore() {
 		globalIndex.Add(e)
 	}
 	log.Printf("[Index] Loaded %d designs from database", globalIndex.Count())
+	// Refresh AFTER loading so the SSE broadcast shows the real count
+	RefreshIdxStateCounts()
+
 
 	// ── Drive detection ───────────────────────────────────────────────────────
 	drives := autoLibPaths()
@@ -104,6 +108,8 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/index/toggle", hToggleSync)
 	mux.HandleFunc("/api/index/stop-all", hStopAllIndexing)
 	mux.HandleFunc("/api/clear", hClear)
+	mux.HandleFunc("/api/perf", hPerf)
+	mux.HandleFunc("/api/perf/mode", hPerfMode)
 	mux.HandleFunc("/api/latest", hLatest)
 	mux.HandleFunc("/api/browse", hBrowseEMB)
 	mux.HandleFunc("/api/open-file", hOpenFile)
@@ -111,6 +117,10 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/open-truesizer", hOpenTrueSizer)
 	mux.HandleFunc("/api/folders", hFolderList)
 	mux.HandleFunc("/api/folders/rescan", hFolderRescan)
+	mux.HandleFunc("/api/folders/stop", hFolderStop)
+	mux.HandleFunc("/api/pick-folder", hPickFolder)
+	mux.HandleFunc("/api/db/backup", hDbBackup)
+	mux.HandleFunc("/api/db/repair", hDbRepair)
 	return mux
 }
 
