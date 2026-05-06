@@ -76,6 +76,20 @@ This eliminates the domain gap between photographic query images and synthetic t
 
 ---
 
+## Key Features
+
+- **Independent Folder Management** — Manage multiple embroidery collections independently. Only indexed folders are searched.
+- **Auto-Tuned Performance** — CPU/RAM-aware worker pools and GC tuning (low-ram, balanced, high-memory profiles).
+- **Real-Time File Watching** — Automatically re-index designs when files change (create, modify, rename, delete).
+- **Dual-Vector Search** — Combines structural shape matching (render) with photo-domain matching (sidecar photos).
+- **Stall Recovery** — Automatic detection and recovery from stuck indexing processes (2-minute threshold).
+- **Queue-Based Indexing** — Multiple scan jobs can be queued and processed sequentially without blocking the UI.
+- **Per-Folder Statistics** — Track indexing progress, total files, and indexed count per folder.
+- **Modern UI** — Dark-mode interface with glass morphism effects, drive selection checkboxes, and responsive design.
+- **Zero Runtime Dependencies** — Static Go binary works on any Linux with no external deps. Python services containerized.
+
+---
+
 ## Download
 
 Pre-built binaries are available on the [Releases](https://github.com/RhythmItaliya/EMBFinder/releases) page.
@@ -101,29 +115,28 @@ img_emb_finder/
 ├── go-server/              Go backend (binary: embfinder)
 │   ├── main_desktop.go     Desktop build — Wails native window  (!headless tag)
 │   ├── main_headless.go    Server build  — pure HTTP, opens browser (headless tag)
-│   ├── server.go           Shared startup: startCore(), buildMux()
-│   ├── config.go           All env-var config (getEnv helpers)
-│   ├── handlers.go         HTTP route handlers
-│   ├── indexer.go          Background EMB walker + dual-embedding
-│   ├── search.go           Parallel sharded cosine similarity
-│   ├── db.go               SQLite WAL (render + sidecar vectors)
-│   ├── drives.go           Drive / volume detection (Linux/Windows/macOS)
-│   ├── drives_select.go    Drive selection persistence
-│   ├── clip.go             CLIP vector type + distance math
-│   ├── watcher.go          fsnotify real-time change detection
-│   └── ui/                 Embedded web UI (HTML + CSS + JS, no build step)
-│       ├── index.html
-│       ├── style.css
-│       ├── api.js          Network layer — all fetch() calls
-│       ├── controllers.js  UI controllers (one per concern)
-│       └── app.js          Orchestrator — wires events, boots controllers
-├── embedder/               AI embedding service (Python / FastAPI)
-│   ├── main.py             v4.0 — batched inference, AMP autocast, no memory leaks
-│   └── requirements.txt
+│   ├── server.go           Shared startup: startCore(), route registration, background goroutines
+│   ├── config.go           Environment config, auto-tuned worker pools, GC tuning
+│   ├── handlers.go         HTTP route handlers — search, indexing, folder management
+│   ├── indexer.go          Background EMB walker, dual-embedding, stall recovery
+│   ├── search.go           Parallel sharded cosine similarity, multi-crop scoring
+│   ├── db.go               SQLite WAL, per-folder tracking, content-hash deduplication
+│   ├── drives.go           Drive detection + selected drive state management
+│   ├── clip.go             Vector type definitions + distance calculations
+│   ├── watcher.go          fsnotify recursive monitoring, real-time re-index
+│   └── ui/                 Modern embedded web UI (HTML + CSS + JS, no build step)
+│       ├── index.html      Responsive dark-mode interface
+│       ├── style.css       Glass morphism, responsive grid, accessibility
+│       ├── api.js          Network layer — all fetch() calls to backend
+│       ├── controllers.js  UI logic: drive selection, folder mgmt, indexing
+│       └── app.js          Event orchestration, controller initialization
+├── embedder/               AI embedding service (Python / FastAPI / CUDA)
+│   ├── main.py             ViT-L-14 multi-crop embeddings, augmented views
+│   └── requirements.txt    torch, fastapi, open-clip
 ├── emb-engine/             EMB rendering service (Python / Flask)
-│   ├── server.py
-│   ├── emb_renderer.py     OLE2 → PyEmbroidery → Placeholder fallback chain
-│   └── requirements.txt
+│   ├── server.py           OLE2 extraction, PyEmbroidery, TrueSizer integration
+│   ├── emb_renderer.py     Binary render extraction, fallback chain
+│   └── requirements.txt    flask, pillow, olefile, pyembroidery
 ├── tests/                  Validation suite (dev mode only)
 │   ├── lib.py              Shared utilities (single source of truth)
 │   ├── quick_test.py       Fast per-query accuracy check
@@ -137,6 +150,7 @@ img_emb_finder/
 ├── Makefile                Developer shortcuts (make dev, make build, make release)
 ├── docker-compose.yml
 ├── .env.example
+├── .gitignore              Includes .logs/ to exclude binary artifacts
 └── .goreleaser.yml         GoReleaser v2 — produces 7 platform archives + .deb/.rpm
 ```
 
@@ -308,28 +322,57 @@ The `release.yml` workflow runs on tag push and:
 | `EMB_ENGINE_URL` | `http://localhost:8767` | EMB engine URL |
 | `HEADLESS` | `0` | `1` = run without Wails desktop window |
 | `DB_PATH` | `data/embfinder.db` | SQLite database path |
+| `EMBFIND_DATA_DIR` | — | Dedicated directory for all EMBFinder data |
+| `EMBFIND_EXTRA_DRIVES` | — | Extra scan paths (semicolon-separated) |
+| `MAX_WORKERS` | auto | Manual override for indexing parallelism |
 | `CLIP_MODEL` | `ViT-L-14` | CLIP model variant |
-| `EMB_LIB` | — | Path to your embroidery library (Docker) |
 
 ---
 
 ## API Reference
 
+### Core Search
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/` | Web UI |
 | `POST` | `/api/search` | Search by image (`multipart/form-data`, field: `file`) |
-| `GET` | `/api/drives/list` | List detected drives with selection state |
-| `POST` | `/api/drives/select` | Set scan paths: `{"paths": [...]}` |
-| `GET` | `/api/index/state/stream` | SSE stream of live indexing progress |
-| `POST` | `/api/index/start` | Trigger immediate scan |
+| `GET` | `/api/preview/{id}` | PNG render of a design (1-week cache) |
+| `GET` | `/api/thumbnail/{id}` | Sidecar garment photo or render fallback |
+
+### Indexing Control
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/index/start` | Trigger scan: `{"paths": [...], "force": bool}` |
+| `POST` | `/api/index/stop-all` | Force-stop indexing and clear job queue |
 | `GET` | `/api/index/toggle` | Pause / resume background auto-sync |
-| `GET` | `/api/preview/{id}` | PNG render of a design |
-| `GET` | `/api/thumbnail/{id}` | Sidecar garment photo |
+| `GET` | `/api/index/state/stream` | SSE stream of live indexing progress |
+
+### Drive & Folder Management
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/drives` | List detected drives with selection state |
+| `POST` | `/api/drives/select` | Set scan folders: `{"paths": [...]}` |
+| `GET` | `/api/folders` | Per-folder statistics and status |
+| `POST` | `/api/folders/rescan` | Immediately rescan a specific folder |
+
+### Library Browser
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | `GET` | `/api/latest` | Latest 50 indexed designs |
 | `GET` | `/api/browse` | Paginated library: `?page=1&q=rose` |
-| `DELETE` | `/api/clear` | Wipe database and memory index |
+| `POST` | `/api/emb-info` | Extract stitch/color/trim metadata |
 | `POST` | `/api/open-file` | Open design folder in OS file manager |
+| `POST` | `/api/open-truesizer` | Open design in TrueSizer GUI |
+
+### System
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `DELETE` | `/api/clear` | Wipe database and memory index |
 
 ---
 
