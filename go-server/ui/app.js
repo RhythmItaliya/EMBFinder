@@ -22,6 +22,8 @@
     TabController.switchTo('folders');
     FolderController.refresh();
   });
+  document.getElementById('addFolderBtn').addEventListener('click', () => FolderController.addFolder());
+  document.getElementById('scanAllBtn').addEventListener('click', () => FolderController.scanAll());
 
   document.getElementById('refreshBtn').addEventListener('click', () => {
     DriveController.reload();
@@ -37,14 +39,14 @@
     if (DropController.getFile()) {
       SearchController.run();
     } else {
-      // Trigger a scan if no file selected
-      const selected = [...document.querySelectorAll('.drive-check:checked')]
-        .map(c => c.dataset.path);
-      if (!selected.length) { Toast.show('Select at least one drive to scan', 'err'); return; }
-      API.get('/api/index/start').then(r => {
-        if (r.status === 'no_drives')       Toast.show(r.msg || 'No drives selected', 'err');
+      // Trigger indexing if no file selected
+      const selected = DriveController.getSelectedPaths();
+      if (!selected.length) { Toast.show('Select at least one folder/drive to scan', 'err'); return; }
+      API.postJSON('/api/index/start', { paths: selected, force: false }).then(r => {
+        if (r.status === 'no_paths')       Toast.show(r.msg || 'No valid folders selected', 'err');
         else if (r.status === 'already_running') Toast.show('Sync already running');
-        else { Toast.show('Scan started'); SyncController.start(); }
+        else if (r.status === 'queued') { Toast.show('Scan queued'); document.getElementById('statusTxt').textContent = 'Starting scan...'; }
+        else { Toast.show('Scan started'); document.getElementById('statusTxt').textContent = 'Starting scan...'; SyncController.start(); }
       }).catch(() => Toast.show('Could not start scan', 'err'));
     }
   });
@@ -88,4 +90,5 @@
   DriveController.reload();
   SyncController.start();
   FolderController.init();
+  TabController.restore();
 })();
