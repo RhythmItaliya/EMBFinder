@@ -61,6 +61,12 @@
       </nav>
 
       <div class="header__actions">
+        <select class="perf-select" id="perfModeSelect" title="Performance mode">
+          <option value="auto">Auto</option>
+          <option value="performance">Performance</option>
+          <option value="balanced">Balanced</option>
+          <option value="power_saver">Power Saver</option>
+        </select>
         <button class="btn btn--outline btn--sm" id="refreshBtn">Refresh</button>
         <button class="btn btn--outline btn--sm" id="syncToggleBtn">
           <span id="syncToggleText">Stop Sync</span>
@@ -208,8 +214,9 @@
       <div class="folders-header">
         <div class="header-main">
           <div class="folders-actions">
-            <button class="btn btn--outline" id="scanAllBtn">Scan All</button>
+            <button class="btn btn--outline" id="scanAllBtn">Scan Pending</button>
             <button class="btn btn--primary" id="addFolderBtn">Add Folder</button>
+            <button class="btn btn--outline" id="repairDbBtn" title="Backup DB, remove duplicates & fix counts">🛠 Repair DB</button>
           </div>
           <div id="folderSummary" class="folder-summary">
             <span id="folderTotalCount">0 folders discovered</span>
@@ -276,14 +283,14 @@
           </div>
 
           <div class="modal-actions">
-            <button class="btn btn--wilcom btn--full" id="openTruesizerBtn" onclick="ModalController.openInTrueSizer()">
+            <button class="btn btn--wilcom btn--full" id="openTruesizerBtn">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z" />
                 <path d="M8 2v16M16 6v16" />
               </svg>
               Open in TrueSizer
             </button>
-            <button class="btn btn--primary btn--full" id="openFolderBtn" onclick="ModalController.openFolder()">
+            <button class="btn btn--primary btn--full" id="openFolderBtn">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
