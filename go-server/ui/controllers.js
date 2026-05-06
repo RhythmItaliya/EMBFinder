@@ -30,6 +30,13 @@ const Utils = {
     const p1 = parts[parts.length - 2] || '';
     if (!p1) return '';
     return p2 && p2 !== p1 ? `${p2} › ${p1}` : p1;
+  },
+  driveLabel: (path) => {
+    if (!path) return '';
+    const clean = String(path).replace(/\/+$/, '');
+    const parts = clean.split('/').filter(Boolean);
+    if (!parts.length) return path;
+    return parts[parts.length - 1];
   }
 };
 
@@ -38,6 +45,7 @@ const SyncController = (() => {
   let _es      = null;
   let _paused  = false;
   let _indexed = 0;
+  let _running = false;
 
   function start() {
     if (_es && _es.readyState !== EventSource.CLOSED) return;
@@ -52,6 +60,7 @@ const SyncController = (() => {
       const d = JSON.parse(e.data);
       _indexed = d.total_indexed || 0;
       _paused  = !!d.user_paused;
+      _running = !!d.running;
       $('dot').className        = 'dot dot--ok';
       $('statusTxt').textContent = `Online`;
       _renderSyncBtn();
@@ -84,6 +93,14 @@ const SyncController = (() => {
     const btn = $('syncToggleBtn');
     btn.disabled = true;
     try {
+      if (_running) {
+        const d = await API.stopAllIndex();
+        _running = false;
+        _paused = true;
+        _renderSyncBtn();
+        Toast.show(`Stopped all scans${d.queue_cleared ? ` (${d.queue_cleared} queued cleared)` : ''}`);
+        return;
+      }
       const d = await API.get('/api/index/toggle');
       _paused = !!d.user_paused;
       _renderSyncBtn();
@@ -114,8 +131,15 @@ const SyncController = (() => {
 
   function _renderSyncBtn() {
     const btn = $('syncToggleBtn'), txt = $('syncToggleText');
+    if (_running) {
+      btn.classList.remove('btn--success');
+      btn.classList.add('btn--danger');
+      txt.textContent = 'Stop All';
+      return;
+    }
     btn.classList.toggle('btn--success',  _paused);
     btn.classList.toggle('btn--outline', !_paused);
+    btn.classList.remove('btn--danger');
     txt.textContent = _paused ? 'Start Sync' : 'Stop Sync';
   }
 
@@ -128,9 +152,13 @@ const SyncController = (() => {
     $('progFill').style.width = `${pct}%`;
     $('progCount').textContent = `${proc.toLocaleString()} / ${total.toLocaleString()} files`;
     $('progLabel').textContent = d.status || 'Syncing…';
+    const rootLabel = Utils.driveLabel(d.current_root);
+    if (rootLabel) $('statusTxt').textContent = `Scanning: ${rootLabel}`;
+    else $('statusTxt').textContent = 'Scanning...';
     
     // Update global stats in header
-    if (d.global_indexed !== undefined) $('globalIndexed').textContent = d.global_indexed.toLocaleString();
+      const idx = d.total_indexed ?? d.global_indexed;
+      if (idx !== undefined) $('globalIndexed').textContent = Number(idx).toLocaleString();
   }
 
   function _renderCounts(counts) {
@@ -154,10 +182,13 @@ const SyncController = (() => {
 
 // ── DriveController ───────────────────────────────────────────────────────────
 const DriveController = (() => {
+  let _drives = [];
+
   async function reload() {
     try {
       const d = await API.get('/api/drives');
-      _render(d.drives || []);
+      _drives = d.drives || [];
+      _render(_drives);
     } catch { /* silent */ }
   }
 
@@ -169,6 +200,9 @@ const DriveController = (() => {
     }
     list.innerHTML = drives.map(d => `
       <div class="drive-item">
+        <label class="drive-check-wrap">
+          <input type="checkbox" class="drive-check" data-path="${d.path}" ${d.selected ? 'checked' : ''} ${!d.usable ? 'disabled' : ''}>
+        </label>
         <div class="drive-icon">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 12A10 10 0 1 1 12 2a10 10 0 0 1 10 10Z"/><path d="M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
@@ -181,10 +215,29 @@ const DriveController = (() => {
         ${d.indexed ? `<div class="drive-badge">${d.indexed.toLocaleString()}</div>` : ''}
       </div>
     `).join('');
+
+    list.querySelectorAll('.drive-check').forEach(cb => {
+      cb.addEventListener('change', () => saveSelection());
+    });
   }
 
+  function getSelectedPaths() {
+    return [...document.querySelectorAll('.drive-check:checked')]
+      .map(c => c.dataset.path)
+      .filter(Boolean);
+  }
 
-  return { reload };
+  async function saveSelection() {
+    const selected = getSelectedPaths();
+    try {
+      await API.postJSON('/api/drives/select', { paths: selected });
+      Toast.show('Drive selection updated');
+    } catch {
+      Toast.show('Failed to save drive selection', 'err');
+    }
+  }
+
+  return { reload, getSelectedPaths, saveSelection };
 })();
 
 // ── DropController ────────────────────────────────────────────────────────────
@@ -422,7 +475,7 @@ const FolderController = (() => {
   function _render() {
     // Update Folder Summary
     const totalFolders = _folders.length;
-    const indexedFolders = _folders.filter(f => f.status === 'Indexed' || f.indexed_files > 0).length;
+    const indexedFolders = _folders.filter(f => f.status === 'Completed' || f.indexed_files > 0).length;
     
     const totalEl = $('folderTotalCount');
     const indexedEl = $('folderIndexedCount');
@@ -485,7 +538,7 @@ const FolderController = (() => {
     
     Toast.show("Adding folder...");
     try {
-      await API.post('/api/folders/rescan', { path }); 
+      await API.postJSON('/api/folders/rescan', { path });
       refresh();
     } catch (e) {
       Toast.show("Failed to add folder", "err");
@@ -494,15 +547,38 @@ const FolderController = (() => {
 
   async function rescan(path) {
     Toast.show("Rescan queued for " + path);
-    await API.post('/api/folders/rescan', { path });
-    refresh();
+    $('statusTxt').textContent = 'Starting scan...';
+    try {
+      await API.postJSON('/api/folders/rescan', { path });
+      refresh();
+    } catch (e) {
+      Toast.show('Rescan failed', 'err');
+    }
+  }
+
+  async function scanAll() {
+    Toast.show('Queueing full scan...');
+    $('statusTxt').textContent = 'Starting scan...';
+    try {
+      const paths = (typeof DriveController !== 'undefined' && DriveController.getSelectedPaths)
+        ? DriveController.getSelectedPaths()
+        : [];
+      const payload = paths.length ? { paths, force: false } : { force: false };
+      const res = await API.postJSON('/api/index/start', payload);
+      if (res.status === 'no_paths') Toast.show(res.msg || 'No folders available', 'err');
+      else if (res.status === 'queued') Toast.show('Full scan queued');
+      else Toast.show('Full scan started');
+      refresh();
+    } catch (e) {
+      Toast.show('Failed to start full scan', 'err');
+    }
   }
 
   function open(path) {
-    API.post('/api/open-file', { path });
+    API.postJSON('/api/open-file', { path });
   }
 
-  return { init, refresh, rescan, open, addFolder };
+  return { init, refresh, rescan, open, addFolder, scanAll };
 })();
 
 // ── LibraryController ─────────────────────────────────────────────────────────
@@ -756,6 +832,8 @@ const ModalController = (() => {
 
 // ── TabController ─────────────────────────────────────────────────────────────
 const TabController = (() => {
+  const KEY = 'embfinder.active_tab';
+
   function switchTo(tab) {
     $('panelSearch').classList.toggle('hidden',  tab !== 'search');
     $('panelLibrary').classList.toggle('hidden', tab !== 'library');
@@ -767,6 +845,7 @@ const TabController = (() => {
     
     if (tab === 'library') LibraryController.load(1, LibraryController.getFilter());
     if (tab === 'folders') FolderController.refresh();
+    _save(tab);
   }
   function current() {
     if (!$('panelSearch').classList.contains('hidden')) return 'search';
@@ -774,5 +853,19 @@ const TabController = (() => {
     if (!$('panelFolders').classList.contains('hidden')) return 'folders';
     return '';
   }
-  return { switchTo, current };
+
+  function restore() {
+    const tab = localStorage.getItem(KEY);
+    if (tab === 'search' || tab === 'library' || tab === 'folders') {
+      switchTo(tab);
+      return tab;
+    }
+    return null;
+  }
+
+  function _save(tab) {
+    try { localStorage.setItem(KEY, tab); } catch (_) {}
+  }
+
+  return { switchTo, current, restore };
 })();
